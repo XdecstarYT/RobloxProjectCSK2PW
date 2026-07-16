@@ -1,0 +1,5625 @@
+<?xml version="1.0" encoding="utf-8"?>
+<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">
+<Meta name="ExplicitAutoJoints">true</Meta>
+<External>null</External>
+<External>nil</External>
+<Item class="ReplicatedStorage" referent="RBX00000047"><Properties></Properties><Item class="Folder" referent="RBX00000017"><Properties><string name="Name">Nexus</string></Properties><Item class="ModuleScript" referent="RBX00000007"><Properties><string name="Name">Config</string><ProtectedString name="Source">--!strict
+--[[
+	Config/init.luau
+	Aggregates every configuration table behind one require. Because this folder
+	has an init.luau, `require(ReplicatedStorage.Nexus.Config)` returns this
+	bundle, while `require(...Config.Buildings)` still works for direct access.
+]]
+
+local Config = {
+	Balance = require(script.Balance),
+	Resources = require(script.Resources),
+	Buildings = require(script.Buildings),
+	Technologies = require(script.Technologies),
+	Governments = require(script.Governments),
+	Laws = require(script.Laws),
+}
+
+return Config
+</ProtectedString></Properties><Item class="ModuleScript" referent="RBX00000001"><Properties><string name="Name">Balance</string><ProtectedString name="Source">--!strict
+--[[
+	Config/Balance.luau
+	Every tunable number that shapes the feel of the game. Isolated from code so
+	an economy designer can rebalance without reading a single service.
+]]
+
+local Balance = {}
+
+-- Starting state for a brand-new nation.
+Balance.START = {
+	resources = {
+		money = 25000,
+		materials = 500,
+		energy = 0,
+		food = 300,
+		research = 0,
+		influence = 50,
+	},
+	population = 20,
+	treasury = 25000,
+	taxRate = 0.15,
+}
+
+-- Economy tuning.
+Balance.ECONOMY = {
+	-- Each employed citizen contributes this much raw output to GDP per tick.
+	gdpPerWorker = 12,
+	-- Tax revenue = gdp * taxRate * this efficiency (corruption erodes it).
+	taxEfficiency = 1.0,
+	-- Above this tax rate, happiness starts to fall each politics tick.
+	taxHappinessThreshold = 0.35,
+	-- Debt accrues interest each economy tick at interestRate / ticksPerYear.
+	baseInterestRate = 4.0, -- percent, annual
+	ticksPerYear = 365,
+	-- Inflation drifts toward this target based on money-supply pressure.
+	inflationTarget = 2.0,
+	inflationDrift = 0.02,
+	-- Bankruptcy: treasury below this triggers emergency measures.
+	bankruptcyFloor = -50000,
+	-- Food shortfall converts to unrest at this rate.
+	starvationUnrest = 0.5,
+	-- Food consumed per citizen per economy tick.
+	foodPerCapita = 0.35,
+	-- Fraction of a surplus applied to debt repayment each tick.
+	debtRepayFraction = 0.10,
+}
+
+-- Population / citizen tuning.
+Balance.CITIZENS = {
+	-- Baseline happiness with no buildings and moderate taxes.
+	baseHappiness = 55,
+	-- Population grows/shrinks toward capacity by this fraction per citizen tick.
+	growthRate = 0.03,
+	-- Happiness needed to attract new residents; below it, people leave.
+	migrationHappiness = 50,
+	-- Each unit of housing capacity supports this many citizens.
+	housingMultiplier = 1.0,
+	-- Fraction of the population that is working-age and seeking work.
+	participation = 0.6,
+	-- Unemployment above this fraction erodes happiness.
+	unemploymentTolerance = 0.15,
+	-- Education and health each nudge happiness toward their own value.
+	serviceInfluence = 0.15,
+}
+
+-- Politics tuning.
+Balance.POLITICS = {
+	-- Approval drifts toward a target derived from happiness &amp; economy.
+	approvalDrift = 0.1,
+	-- Stability = weighted blend; below this, crises can fire.
+	crisisStabilityThreshold = 35,
+	-- Corruption naturally creeps up; anti-corruption laws push it down.
+	corruptionCreep = 0.05,
+	-- Term length in seconds of real playtime for elective governments.
+	electionTermSeconds = 60 * 20,
+}
+
+-- Research tuning.
+Balance.RESEARCH = {
+	-- Research buildings convert their output into points at this rate.
+	pointConversion = 1.0,
+	-- Flat passive research from an educated populace.
+	passivePerEducation = 0.05,
+}
+
+-- Construction tuning.
+Balance.CONSTRUCTION = {
+	-- Refund fraction when a player demolishes a building.
+	demolishRefund = 0.4,
+	-- Condition lost per economy tick; maintenance offsets it.
+	decayPerTick = 0.002,
+	-- Below this condition a building goes offline until repaired.
+	offlineCondition = 0.25,
+	-- Upgrade cost multiplier growth is defined per-building; this is the cap.
+	maxLevel = 5,
+}
+
+return Balance
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000002"><Properties><string name="Name">Buildings</string><ProtectedString name="Source">--!strict
+--[[
+	Config/Buildings.luau
+	The catalogue every construction decision reads from. Each entry is a pure
+	data record (Types.BuildingDef). Costs scale per upgrade level via `scale`,
+	which keeps the tables terse while remaining fully data-driven.
+
+	Balance intent:
+	  * Level 1 is affordable early; upgrades cost geometrically more.
+	  * Producers need power and jobs, so growth forces power + housing first.
+	  * Every category has a clear role in the economy/citizen loop.
+]]
+
+local Types = require(script.Parent.Parent.Types)
+
+type BuildingDef = Types.BuildingDef
+type ResourceBag = Types.ResourceBag
+
+-- Build a per-level cost table from a base cost and a geometric growth factor.
+local function scale(base: ResourceBag, maxLevel: number, growth: number): { [number]: ResourceBag }
+	local out: { [number]: ResourceBag } = {}
+	for level = 1, maxLevel do
+		local factor = growth ^ (level - 1)
+		local bag: ResourceBag = {}
+		for resource, amount in base do
+			bag[resource :: any] = math.floor(amount * factor + 0.5)
+		end
+		out[level] = bag
+	end
+	return out
+end
+
+local Buildings: { [string]: BuildingDef } = {}
+
+local function define(def: BuildingDef)
+	Buildings[def.kind] = def
+end
+
+-- ---- Housing --------------------------------------------------------------
+
+define({
+	kind = "house",
+	displayName = "Housing Block",
+	category = "Housing",
+	description = "Homes for citizens. More housing raises your population cap.",
+	footprint = { w = 2, h = 2 },
+	requiresTech = nil,
+	maxLevel = 5,
+	cost = scale({ money = 1200, materials = 40 }, 5, 1.8),
+	upkeep = { money = 20 },
+	produces = {},
+	jobs = 0,
+	powerDraw = 4,
+	powerSupply = 0,
+	happiness = 1,
+	housing = 25,
+})
+
+define({
+	kind = "apartments",
+	displayName = "Apartment Tower",
+	category = "Housing",
+	description = "Dense vertical housing. Efficient land use, higher upkeep.",
+	footprint = { w = 2, h = 2 },
+	requiresTech = "construction_1",
+	maxLevel = 5,
+	cost = scale({ money = 6000, materials = 180 }, 5, 1.7),
+	upkeep = { money = 90 },
+	produces = {},
+	jobs = 0,
+	powerDraw = 14,
+	powerSupply = 0,
+	happiness = 0,
+	housing = 120,
+})
+
+-- ---- Power ----------------------------------------------------------------
+
+define({
+	kind = "coal_plant",
+	displayName = "Coal Power Plant",
+	category = "Power",
+	description = "Cheap, reliable power. Pollutes: a small happiness penalty.",
+	footprint = { w = 3, h = 3 },
+	requiresTech = nil,
+	maxLevel = 4,
+	cost = scale({ money = 4000, materials = 120 }, 4, 1.9),
+	upkeep = { money = 120, materials = 5 },
+	produces = {},
+	jobs = 12,
+	powerDraw = 0,
+	powerSupply = 120,
+	happiness = -2,
+})
+
+define({
+	kind = "solar_farm",
+	displayName = "Solar Array",
+	category = "Power",
+	description = "Clean power with no material upkeep. Unlocked by research.",
+	footprint = { w = 3, h = 3 },
+	requiresTech = "energy_2",
+	maxLevel = 4,
+	cost = scale({ money = 9000, materials = 200 }, 4, 1.8),
+	upkeep = { money = 60 },
+	produces = {},
+	jobs = 6,
+	powerDraw = 0,
+	powerSupply = 150,
+	happiness = 1,
+})
+
+-- ---- Food -----------------------------------------------------------------
+
+define({
+	kind = "farm",
+	displayName = "Farm",
+	category = "Food",
+	description = "Produces food each tick to feed your population.",
+	footprint = { w = 3, h = 3 },
+	requiresTech = nil,
+	maxLevel = 4,
+	cost = scale({ money = 2000, materials = 60 }, 4, 1.7),
+	upkeep = { money = 30 },
+	produces = { food = 40 },
+	jobs = 10,
+	powerDraw = 6,
+	powerSupply = 0,
+	happiness = 0,
+})
+
+-- ---- Industry -------------------------------------------------------------
+
+define({
+	kind = "mine",
+	displayName = "Materials Mine",
+	category = "Industry",
+	description = "Extracts raw materials used by all construction.",
+	footprint = { w = 3, h = 3 },
+	requiresTech = nil,
+	maxLevel = 5,
+	cost = scale({ money = 3500, materials = 50 }, 5, 1.8),
+	upkeep = { money = 70 },
+	produces = { materials = 18 },
+	jobs = 16,
+	powerDraw = 18,
+	powerSupply = 0,
+	happiness = -1,
+})
+
+define({
+	kind = "factory",
+	displayName = "Factory",
+	category = "Industry",
+	description = "Converts labour and power into strong tax revenue.",
+	footprint = { w = 3, h = 3 },
+	requiresTech = "industry_1",
+	maxLevel = 5,
+	cost = scale({ money = 8000, materials = 220 }, 5, 1.75),
+	upkeep = { money = 150, materials = 8 },
+	produces = { money = 260 },
+	jobs = 30,
+	powerDraw = 30,
+	powerSupply = 0,
+	happiness = -1,
+})
+
+-- ---- Commerce -------------------------------------------------------------
+
+define({
+	kind = "market",
+	displayName = "Commercial Market",
+	category = "Commerce",
+	description = "Employs citizens and generates steady tax income.",
+	footprint = { w = 2, h = 2 },
+	requiresTech = nil,
+	maxLevel = 5,
+	cost = scale({ money = 3000, materials = 70 }, 5, 1.7),
+	upkeep = { money = 60 },
+	produces = { money = 120 },
+	jobs = 18,
+	powerDraw = 10,
+	powerSupply = 0,
+	happiness = 1,
+})
+
+-- ---- Research -------------------------------------------------------------
+
+define({
+	kind = "lab",
+	displayName = "Research Lab",
+	category = "Research",
+	description = "Produces research points to advance your technology tree.",
+	footprint = { w = 2, h = 2 },
+	requiresTech = "computing_1",
+	maxLevel = 5,
+	cost = scale({ money = 7000, materials = 150 }, 5, 1.8),
+	upkeep = { money = 130 },
+	produces = { research = 8 },
+	jobs = 20,
+	powerDraw = 22,
+	powerSupply = 0,
+	happiness = 0,
+})
+
+-- ---- Public services ------------------------------------------------------
+
+define({
+	kind = "school",
+	displayName = "School",
+	category = "Services",
+	description = "Raises the education of your citizens, boosting happiness.",
+	footprint = { w = 2, h = 2 },
+	requiresTech = nil,
+	maxLevel = 4,
+	cost = scale({ money = 4500, materials = 100 }, 4, 1.7),
+	upkeep = { money = 110 },
+	produces = {},
+	jobs = 14,
+	powerDraw = 10,
+	powerSupply = 0,
+	happiness = 2,
+	education = 20,
+})
+
+define({
+	kind = "hospital",
+	displayName = "Hospital",
+	category = "Services",
+	description = "Improves citizen health and long-term happiness.",
+	footprint = { w = 3, h = 2 },
+	requiresTech = "medicine_1",
+	maxLevel = 4,
+	cost = scale({ money = 6500, materials = 160 }, 4, 1.7),
+	upkeep = { money = 160 },
+	produces = {},
+	jobs = 22,
+	powerDraw = 16,
+	powerSupply = 0,
+	happiness = 3,
+	health = 25,
+})
+
+define({
+	kind = "park",
+	displayName = "City Park",
+	category = "Services",
+	description = "A cheap, cheerful happiness boost with tiny upkeep.",
+	footprint = { w = 2, h = 2 },
+	requiresTech = nil,
+	maxLevel = 3,
+	cost = scale({ money = 1500, materials = 30 }, 3, 1.6),
+	upkeep = { money = 15 },
+	produces = {},
+	jobs = 2,
+	powerDraw = 2,
+	powerSupply = 0,
+	happiness = 4,
+})
+
+-- ---- Government -----------------------------------------------------------
+
+define({
+	kind = "city_hall",
+	displayName = "City Hall",
+	category = "Government",
+	description = "Seat of government. Reduces corruption and boosts influence.",
+	footprint = { w = 3, h = 3 },
+	requiresTech = nil,
+	maxLevel = 3,
+	cost = scale({ money = 5000, materials = 120 }, 3, 2.0),
+	upkeep = { money = 100 },
+	produces = { influence = 3 },
+	jobs = 12,
+	powerDraw = 12,
+	powerSupply = 0,
+	happiness = 1,
+})
+
+return Buildings
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000003"><Properties><string name="Name">Governments</string><ProtectedString name="Source">--!strict
+--[[
+	Config/Governments.luau
+	Government archetypes. Each one reshapes the game through a bundle of
+	multipliers and switches that the economy, citizen and politics services
+	read. Switching government is a meaningful strategic pivot, not cosmetic.
+]]
+
+local Types = require(script.Parent.Parent.Types)
+
+type GovernmentId = Types.GovernmentId
+
+export type GovernmentDef = {
+	id: GovernmentId,
+	displayName: string,
+	description: string,
+	holdsElections: boolean,
+	modifiers: {
+		taxCeiling: number, -- highest tax rate the government may set
+		taxEfficiency: number, -- multiplier on collected revenue
+		happiness: number, -- flat happiness offset
+		corruptionCreep: number, -- multiplier on corruption growth
+		researchBonus: number, -- multiplier on research output
+		influenceBonus: number, -- multiplier on influence generation
+		stability: number, -- flat stability offset
+	},
+}
+
+local Governments: { [GovernmentId]: GovernmentDef } = {
+	democracy = {
+		id = "democracy",
+		displayName = "Democracy",
+		description = "Elections keep you accountable. High happiness, capped taxes.",
+		holdsElections = true,
+		modifiers = {
+			taxCeiling = 0.45,
+			taxEfficiency = 1.0,
+			happiness = 6,
+			corruptionCreep = 0.8,
+			researchBonus = 1.1,
+			influenceBonus = 1.15,
+			stability = 5,
+		},
+	},
+	republic = {
+		id = "republic",
+		displayName = "Republic",
+		description = "Balanced representative rule. A dependable all-rounder.",
+		holdsElections = true,
+		modifiers = {
+			taxCeiling = 0.5,
+			taxEfficiency = 1.05,
+			happiness = 3,
+			corruptionCreep = 1.0,
+			researchBonus = 1.05,
+			influenceBonus = 1.05,
+			stability = 3,
+		},
+	},
+	monarchy = {
+		id = "monarchy",
+		displayName = "Monarchy",
+		description = "Tradition and stability, but slower to modernise.",
+		holdsElections = false,
+		modifiers = {
+			taxCeiling = 0.55,
+			taxEfficiency = 1.0,
+			happiness = 2,
+			corruptionCreep = 1.1,
+			researchBonus = 0.9,
+			influenceBonus = 1.1,
+			stability = 8,
+		},
+	},
+	socialist = {
+		id = "socialist",
+		displayName = "Socialist State",
+		description = "High services and equality; taxes can run very high.",
+		holdsElections = true,
+		modifiers = {
+			taxCeiling = 0.7,
+			taxEfficiency = 0.95,
+			happiness = 4,
+			corruptionCreep = 1.0,
+			researchBonus = 1.0,
+			influenceBonus = 0.95,
+			stability = 2,
+		},
+	},
+	technocracy = {
+		id = "technocracy",
+		displayName = "Technocracy",
+		description = "Rule by experts. Powerful research, modest happiness.",
+		holdsElections = false,
+		modifiers = {
+			taxCeiling = 0.5,
+			taxEfficiency = 1.1,
+			happiness = 0,
+			corruptionCreep = 0.6,
+			researchBonus = 1.35,
+			influenceBonus = 1.0,
+			stability = 4,
+		},
+	},
+	military = {
+		id = "military",
+		displayName = "Military Government",
+		description = "Order through force. Very stable, unhappy, high taxes.",
+		holdsElections = false,
+		modifiers = {
+			taxCeiling = 0.6,
+			taxEfficiency = 1.1,
+			happiness = -6,
+			corruptionCreep = 1.2,
+			researchBonus = 0.95,
+			influenceBonus = 0.9,
+			stability = 12,
+		},
+	},
+	authoritarian = {
+		id = "authoritarian",
+		displayName = "Authoritarian State",
+		description = "Total control: maximum taxes, high corruption, low joy.",
+		holdsElections = false,
+		modifiers = {
+			taxCeiling = 0.8,
+			taxEfficiency = 1.15,
+			happiness = -8,
+			corruptionCreep = 1.5,
+			researchBonus = 0.9,
+			influenceBonus = 0.85,
+			stability = 10,
+		},
+	},
+}
+
+return Governments
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000004"><Properties><string name="Name">Laws</string><ProtectedString name="Source">--!strict
+--[[
+	Config/Laws.luau
+	Toggleable national policies. Each law is a trade-off applied while active,
+	so a player crafts an identity by stacking laws that fit their strategy.
+	Some laws require a government type or technology to enact.
+]]
+
+local Types = require(script.Parent.Parent.Types)
+
+type GovernmentId = Types.GovernmentId
+
+export type LawDef = {
+	id: string,
+	displayName: string,
+	description: string,
+	requiresTech: string?,
+	forbiddenGovernments: { GovernmentId },
+	modifiers: {
+		happiness: number?,
+		taxEfficiency: number?,
+		corruption: number?,
+		researchBonus: number?,
+		foodProduction: number?,
+		stability: number?,
+		upkeep: number?, -- multiplier on all building upkeep
+	},
+}
+
+local Laws: { [string]: LawDef } = {
+	free_healthcare = {
+		id = "free_healthcare",
+		displayName = "Universal Healthcare",
+		description = "+happiness and health, but building upkeep rises 8%.",
+		requiresTech = "medicine_1",
+		forbiddenGovernments = {},
+		modifiers = { happiness = 5, upkeep = 0.08 },
+	},
+	free_education = {
+		id = "free_education",
+		displayName = "Free Education",
+		description = "Boosts research output 15% at the cost of 6% upkeep.",
+		requiresTech = nil,
+		forbiddenGovernments = {},
+		modifiers = { researchBonus = 0.15, upkeep = 0.06 },
+	},
+	anti_corruption = {
+		id = "anti_corruption",
+		displayName = "Anti-Corruption Bureau",
+		description = "Sharply reduces corruption; slightly lowers stability.",
+		requiresTech = "government_1",
+		forbiddenGovernments = { "authoritarian" },
+		modifiers = { corruption = -12, stability = -2 },
+	},
+	subsidised_farming = {
+		id = "subsidised_farming",
+		displayName = "Farm Subsidies",
+		description = "+20% food production, funded by lower tax efficiency.",
+		requiresTech = nil,
+		forbiddenGovernments = {},
+		modifiers = { foodProduction = 0.20, taxEfficiency = -0.05 },
+	},
+	martial_law = {
+		id = "martial_law",
+		displayName = "Martial Law",
+		description = "Large stability gain, heavy happiness cost.",
+		requiresTech = nil,
+		forbiddenGovernments = { "democracy" },
+		modifiers = { stability = 15, happiness = -10 },
+	},
+	press_freedom = {
+		id = "press_freedom",
+		displayName = "Press Freedom",
+		description = "Happier, less corrupt citizens; a small stability risk.",
+		requiresTech = nil,
+		forbiddenGovernments = { "authoritarian", "military" },
+		modifiers = { happiness = 4, corruption = -5, stability = -3 },
+	},
+}
+
+return Laws
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000005"><Properties><string name="Name">Resources</string><ProtectedString name="Source">--!strict
+--[[
+	Config/Resources.luau
+	Display metadata for each resource. Simulation math lives elsewhere; this is
+	purely how a resource is labelled and coloured in the UI.
+]]
+
+export type ResourceMeta = {
+	id: string,
+	displayName: string,
+	symbol: string,
+	color: { number }, -- {r, g, b} 0..1
+	-- Whether the HUD shows an absolute stockpile or a per-tick flow.
+	kind: "stock" | "flow",
+	description: string,
+}
+
+local Resources: { [string]: ResourceMeta } = {
+	money = {
+		id = "money",
+		displayName = "Treasury",
+		symbol = "$",
+		color = { 0.36, 0.82, 0.45 },
+		kind = "stock",
+		description = "Liquid national funds used for construction and services.",
+	},
+	materials = {
+		id = "materials",
+		displayName = "Materials",
+		symbol = "▣",
+		color = { 0.78, 0.6, 0.36 },
+		kind = "stock",
+		description = "Raw building stock consumed by construction and upgrades.",
+	},
+	energy = {
+		id = "energy",
+		displayName = "Power",
+		symbol = "⚡",
+		color = { 0.98, 0.82, 0.32 },
+		kind = "flow",
+		description = "Net electrical capacity. Negative power idles buildings.",
+	},
+	food = {
+		id = "food",
+		displayName = "Food",
+		symbol = "❖",
+		color = { 0.55, 0.78, 0.4 },
+		kind = "stock",
+		description = "Feeds the population. Shortfalls breed unrest.",
+	},
+	research = {
+		id = "research",
+		displayName = "Research",
+		symbol = "✦",
+		color = { 0.45, 0.66, 0.95 },
+		kind = "flow",
+		description = "Points that advance the technology tree.",
+	},
+	influence = {
+		id = "influence",
+		displayName = "Influence",
+		symbol = "◆",
+		color = { 0.72, 0.5, 0.92 },
+		kind = "stock",
+		description = "Diplomatic capital spent on treaties and expansion.",
+	},
+}
+
+return Resources
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000006"><Properties><string name="Name">Technologies</string><ProtectedString name="Source">--!strict
+--[[
+	Config/Technologies.luau
+	The research tree. Each tech gates buildings and/or applies named modifiers
+	that services look up (e.g. EconomyService reads "taxBonus"). Prerequisites
+	form a DAG validated by ResearchService before anything can be unlocked.
+]]
+
+local Types = require(script.Parent.Parent.Types)
+
+type TechDef = Types.TechDef
+
+local Technologies: { [string]: TechDef } = {}
+
+local function define(def: TechDef)
+	Technologies[def.id] = def
+end
+
+-- ---- Construction branch --------------------------------------------------
+
+define({
+	id = "construction_1",
+	displayName = "Reinforced Concrete",
+	branch = "Construction",
+	description = "Unlocks dense apartment towers and cuts material costs 5%.",
+	cost = 40,
+	requires = {},
+	unlocksBuildings = { "apartments" },
+	modifiers = { materialCost = -0.05 },
+})
+
+-- ---- Energy branch --------------------------------------------------------
+
+define({
+	id = "energy_1",
+	displayName = "Grid Efficiency",
+	branch = "Energy",
+	description = "Power plants supply 10% more energy.",
+	cost = 30,
+	requires = {},
+	unlocksBuildings = {},
+	modifiers = { powerSupply = 0.10 },
+})
+
+define({
+	id = "energy_2",
+	displayName = "Photovoltaics",
+	branch = "Energy",
+	description = "Unlocks clean solar arrays.",
+	cost = 80,
+	requires = { "energy_1" },
+	unlocksBuildings = { "solar_farm" },
+	modifiers = {},
+})
+
+-- ---- Industry branch ------------------------------------------------------
+
+define({
+	id = "industry_1",
+	displayName = "Assembly Lines",
+	branch = "Industry",
+	description = "Unlocks factories for high tax revenue.",
+	cost = 60,
+	requires = {},
+	unlocksBuildings = { "factory" },
+	modifiers = {},
+})
+
+define({
+	id = "industry_2",
+	displayName = "Automation",
+	branch = "Industry",
+	description = "Industry buildings need 15% fewer workers.",
+	cost = 120,
+	requires = { "industry_1", "computing_1" },
+	unlocksBuildings = {},
+	modifiers = { industryJobs = -0.15 },
+})
+
+-- ---- Computing branch -----------------------------------------------------
+
+define({
+	id = "computing_1",
+	displayName = "Digital Records",
+	branch = "Computing",
+	description = "Unlocks research labs and reduces corruption growth.",
+	cost = 50,
+	requires = {},
+	unlocksBuildings = { "lab" },
+	modifiers = { corruptionCreep = -0.30 },
+})
+
+-- ---- Medicine branch ------------------------------------------------------
+
+define({
+	id = "medicine_1",
+	displayName = "Public Health",
+	branch = "Medicine",
+	description = "Unlocks hospitals and lifts baseline citizen health.",
+	cost = 70,
+	requires = {},
+	unlocksBuildings = { "hospital" },
+	modifiers = { baseHealth = 10 },
+})
+
+-- ---- Agriculture branch ---------------------------------------------------
+
+define({
+	id = "agriculture_1",
+	displayName = "Crop Rotation",
+	branch = "Agriculture",
+	description = "Farms produce 25% more food.",
+	cost = 45,
+	requires = {},
+	unlocksBuildings = {},
+	modifiers = { foodProduction = 0.25 },
+})
+
+-- ---- Government branch -----------------------------------------------------
+
+define({
+	id = "government_1",
+	displayName = "Civil Service",
+	branch = "Government",
+	description = "Tax collection is 8% more efficient.",
+	cost = 90,
+	requires = { "computing_1" },
+	unlocksBuildings = {},
+	modifiers = { taxEfficiency = 0.08 },
+})
+
+define({
+	id = "government_2",
+	displayName = "Diplomatic Corps",
+	branch = "Government",
+	description = "Generates extra influence and unlocks advanced diplomacy.",
+	cost = 150,
+	requires = { "government_1" },
+	unlocksBuildings = {},
+	modifiers = { influenceBonus = 0.20 },
+})
+
+return Technologies
+</ProtectedString></Properties></Item></Item><Item class="ModuleScript" referent="RBX00000008"><Properties><string name="Name">Constants</string><ProtectedString name="Source">--!strict
+--[[
+	Constants.luau
+	Immutable, project-wide constants. No gameplay balance numbers live here —
+	those belong in Config/Balance.luau so designers can tune them separately.
+]]
+
+local Constants = {}
+
+-- Schema version of the persisted profile. Bump this whenever the shape of
+-- Types.Profile changes, and add a matching migration in DataService.
+Constants.PROFILE_SCHEMA_VERSION = 1
+
+-- DataStore names. Suffixing with an environment tag lets us keep test saves
+-- isolated from production ones.
+Constants.DATASTORE_NAME = "NexusProfiles_v1"
+Constants.DATASTORE_BACKUP_NAME = "NexusProfileBackups_v1"
+
+-- Simulation cadence (seconds of real time per simulated tick).
+Constants.ECONOMY_TICK = 5
+Constants.CITIZEN_TICK = 10
+Constants.POLITICS_TICK = 30
+
+-- Autosave cadence and session-lock behaviour.
+Constants.AUTOSAVE_INTERVAL = 90
+Constants.SESSION_LOCK_STALE_AFTER = 60 * 30 -- a lock older than this is reclaimable
+Constants.DATASTORE_MAX_RETRIES = 5
+
+-- World grid. The buildable map is a square grid of this many tiles per side,
+-- each tile STUDS_PER_TILE studs wide.
+Constants.GRID_SIZE = 64
+Constants.STUDS_PER_TILE = 8
+
+-- Networking guardrails.
+Constants.NET_FOLDER_NAME = "NexusRemotes"
+Constants.NET_REQUEST_TIMEOUT = 10
+
+-- How many GDP samples to retain for the economy graph.
+Constants.GDP_HISTORY_LENGTH = 60
+
+-- The set of resource ids, in a stable display order.
+Constants.RESOURCE_ORDER = { "money", "materials", "energy", "food", "research", "influence" } :: { string }
+
+return Constants
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000009"><Properties><string name="Name">Logger</string><ProtectedString name="Source">--!strict
+--[[
+	Logger.luau
+	Namespaced, level-filtered logging. Every subsystem creates its own logger
+	via Logger.new("EconomyService") so output is greppable and can be muted per
+	scope in production without touching call sites.
+]]
+
+local Logger = {}
+Logger.__index = Logger
+
+export type Level = "debug" | "info" | "warn" | "error"
+
+local LEVEL_WEIGHT: { [Level]: number } = {
+	debug = 10,
+	info = 20,
+	warn = 30,
+	error = 40,
+}
+
+-- Raise this to "info" or "warn" in a shipped build to quiet the console.
+local minLevel: Level = "debug"
+
+export type Logger = {
+	Debug: (self: Logger, ...any) -&gt; (),
+	Info: (self: Logger, ...any) -&gt; (),
+	Warn: (self: Logger, ...any) -&gt; (),
+	Error: (self: Logger, ...any) -&gt; (),
+}
+
+function Logger.setMinLevel(level: Level)
+	minLevel = level
+end
+
+local function format(scope: string, level: Level, ...: any): string
+	local parts = {}
+	for i = 1, select("#", ...) do
+		parts[i] = tostring(select(i, ...))
+	end
+	return ("[Nexus/%s][%s] %s"):format(scope, level:upper(), table.concat(parts, " "))
+end
+
+function Logger.new(scope: string): Logger
+	local self = setmetatable({ _scope = scope }, Logger)
+	return (self :: any) :: Logger
+end
+
+function Logger:_emit(level: Level, ...: any)
+	if LEVEL_WEIGHT[level] &lt; LEVEL_WEIGHT[minLevel] then
+		return
+	end
+	local message = format(self._scope, level, ...)
+	if level == "error" then
+		warn(message) -- keep the traceback path but never `error()` from logging
+	elseif level == "warn" then
+		warn(message)
+	else
+		print(message)
+	end
+end
+
+function Logger:Debug(...: any)
+	self:_emit("debug", ...)
+end
+
+function Logger:Info(...: any)
+	self:_emit("info", ...)
+end
+
+function Logger:Warn(...: any)
+	self:_emit("warn", ...)
+end
+
+function Logger:Error(...: any)
+	self:_emit("error", ...)
+end
+
+return Logger
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000010"><Properties><string name="Name">Net</string><ProtectedString name="Source">--!strict
+--[[
+	Net.luau
+	The single, guarded gateway between client and server.
+
+	Everything that crosses the wire goes through one RemoteFunction (`Request`,
+	for round-trip actions) and one RemoteEvent (`Push`, for fire-and-forget in
+	both directions). Traffic is multiplexed by a string `route`, so adding a new
+	message never means adding a new Instance a exploiter could probe.
+
+	Server responsibilities baked in here (never trust the client):
+	  * per-player, per-route token-bucket rate limiting
+	  * payload shape/size guards before a handler ever runs
+	  * every handler wrapped so a thrown error becomes a clean NetResult, not a
+	    leaked stack trace or a dropped RemoteFunction invocation
+
+	The module detects its context via RunService and only exposes the API that
+	is safe for that side.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local Constants = require(script.Parent.Constants)
+local Logger = require(script.Parent.Logger)
+local Types = require(script.Parent.Types)
+
+type NetResult = Types.NetResult
+
+local log = Logger.new("Net")
+local IS_SERVER = RunService:IsServer()
+
+local Net = {}
+
+-- Default rate budget applied to every route unless a handler overrides it.
+local DEFAULT_RATE = { rate = 20, per = 1 } -- 20 requests per second, bursty via bucket
+
+-- ---------------------------------------------------------------------------
+-- Remote instances
+-- ---------------------------------------------------------------------------
+
+local requestRemote: RemoteFunction
+local pushRemote: RemoteEvent
+
+local function buildRemotes()
+	local folder = Instance.new("Folder")
+	folder.Name = Constants.NET_FOLDER_NAME
+
+	requestRemote = Instance.new("RemoteFunction")
+	requestRemote.Name = "Request"
+	requestRemote.Parent = folder
+
+	pushRemote = Instance.new("RemoteEvent")
+	pushRemote.Name = "Push"
+	pushRemote.Parent = folder
+
+	folder.Parent = ReplicatedStorage
+end
+
+local function findRemotes()
+	local folder = ReplicatedStorage:WaitForChild(Constants.NET_FOLDER_NAME, 20)
+	assert(folder, "[Net] remote folder never replicated")
+	requestRemote = folder:WaitForChild("Request") :: RemoteFunction
+	pushRemote = folder:WaitForChild("Push") :: RemoteEvent
+end
+
+-- ---------------------------------------------------------------------------
+-- Server implementation
+-- ---------------------------------------------------------------------------
+
+if IS_SERVER then
+	local Players = game:GetService("Players")
+
+	type RequestHandler = (player: Player, payload: any) -&gt; any
+	type EventHandler = (player: Player, payload: any) -&gt; ()
+	type RateConfig = { rate: number, per: number }
+
+	local requestHandlers: { [string]: { fn: RequestHandler, rate: RateConfig } } = {}
+	local eventHandlers: { [string]: { fn: EventHandler, rate: RateConfig } } = {}
+
+	-- Token buckets keyed by player then route.
+	local buckets: { [Player]: { [string]: { tokens: number, updated: number } } } = {}
+
+	Players.PlayerRemoving:Connect(function(player)
+		buckets[player] = nil
+	end)
+
+	local function consumeToken(player: Player, route: string, cfg: RateConfig): boolean
+		local perPlayer = buckets[player]
+		if not perPlayer then
+			perPlayer = {}
+			buckets[player] = perPlayer
+		end
+		local bucket = perPlayer[route]
+		local now = os.clock()
+		if not bucket then
+			bucket = { tokens = cfg.rate, updated = now }
+			perPlayer[route] = bucket
+		end
+		-- Refill proportionally to elapsed time, capped at capacity.
+		local elapsed = now - bucket.updated
+		bucket.updated = now
+		bucket.tokens = math.min(cfg.rate, bucket.tokens + elapsed * (cfg.rate / cfg.per))
+		if bucket.tokens &gt;= 1 then
+			bucket.tokens -= 1
+			return true
+		end
+		return false
+	end
+
+	-- Reject anything that could be a memory-abuse vector before dispatch.
+	local function payloadIsSane(payload: any): boolean
+		local t = typeof(payload)
+		if t == "nil" or t == "number" or t == "boolean" or t == "string" then
+			return t ~= "string" or #payload &lt;= 4096
+		end
+		if t == "table" then
+			return true -- handlers do the deep validation
+		end
+		return false
+	end
+
+	-- Create the remotes before wiring any handler onto them.
+	buildRemotes()
+
+	requestRemote.OnServerInvoke = function(player: Player, route: any, payload: any): NetResult
+		if typeof(route) ~= "string" then
+			return { ok = false, error = "bad_route" }
+		end
+		local entry = requestHandlers[route]
+		if not entry then
+			log:Warn(("unknown request route %q from %s"):format(route, player.Name))
+			return { ok = false, error = "unknown_route" }
+		end
+		if not payloadIsSane(payload) then
+			return { ok = false, error = "bad_payload" }
+		end
+		if not consumeToken(player, route, entry.rate) then
+			return { ok = false, error = "rate_limited" }
+		end
+
+		local ok, result = pcall(entry.fn, player, payload)
+		if not ok then
+			log:Warn(("handler %q errored: %s"):format(route, tostring(result)))
+			return { ok = false, error = "internal" }
+		end
+		return { ok = true, data = result }
+	end
+
+	pushRemote.OnServerEvent:Connect(function(player: Player, route: any, payload: any)
+		if typeof(route) ~= "string" then
+			return
+		end
+		local entry = eventHandlers[route]
+		if not entry then
+			return
+		end
+		if not payloadIsSane(payload) then
+			return
+		end
+		if not consumeToken(player, route, entry.rate) then
+			return
+		end
+		local ok, err = pcall(entry.fn, player, payload)
+		if not ok then
+			log:Warn(("event %q errored: %s"):format(route, tostring(err)))
+		end
+	end)
+
+	--- Register a round-trip handler. `handler(player, payload)` returns the
+	--- data to send back; throwing yields `{ ok = false, error = "internal" }`.
+	function Net.handleRequest(route: string, handler: RequestHandler, rate: RateConfig?)
+		assert(not requestHandlers[route], "duplicate request route: " .. route)
+		requestHandlers[route] = { fn = handler, rate = rate or DEFAULT_RATE }
+	end
+
+	--- Register a fire-and-forget client -&gt; server handler.
+	function Net.onEvent(route: string, handler: EventHandler, rate: RateConfig?)
+		assert(not eventHandlers[route], "duplicate event route: " .. route)
+		eventHandlers[route] = { fn = handler, rate = rate or DEFAULT_RATE }
+	end
+
+	function Net.fireClient(player: Player, route: string, payload: any)
+		pushRemote:FireClient(player, route, payload)
+	end
+
+	function Net.fireAllClients(route: string, payload: any)
+		pushRemote:FireAllClients(route, payload)
+	end
+
+	log:Info("server gateway ready")
+else
+	-- -----------------------------------------------------------------------
+	-- Client implementation
+	-- -----------------------------------------------------------------------
+
+	local listeners: { [string]: { (payload: any) -&gt; () } } = {}
+
+	findRemotes()
+
+	pushRemote.OnClientEvent:Connect(function(route: any, payload: any)
+		if typeof(route) ~= "string" then
+			return
+		end
+		local bucket = listeners[route]
+		if not bucket then
+			return
+		end
+		for _, fn in bucket do
+			local ok, err = pcall(fn, payload)
+			if not ok then
+				log:Warn(("client listener %q errored: %s"):format(route, tostring(err)))
+			end
+		end
+	end)
+
+	--- Round-trip request to the server. Always resolves to a NetResult; network
+	--- failures are converted into `{ ok = false, error = "network" }`.
+	function Net.request(route: string, payload: any?): NetResult
+		local ok, result = pcall(function()
+			return requestRemote:InvokeServer(route, payload)
+		end)
+		if not ok then
+			log:Warn(("request %q failed: %s"):format(route, tostring(result)))
+			return { ok = false, error = "network" }
+		end
+		if typeof(result) ~= "table" then
+			return { ok = false, error = "malformed_response" }
+		end
+		return result :: NetResult
+	end
+
+	function Net.fireServer(route: string, payload: any?)
+		pushRemote:FireServer(route, payload)
+	end
+
+	--- Subscribe to a server push. Returns an unsubscribe function.
+	function Net.onEvent(route: string, handler: (payload: any) -&gt; ()): () -&gt; ()
+		local bucket = listeners[route]
+		if not bucket then
+			bucket = {}
+			listeners[route] = bucket
+		end
+		table.insert(bucket, handler)
+		return function()
+			local i = table.find(bucket, handler)
+			if i then
+				table.remove(bucket, i)
+			end
+		end
+	end
+
+	log:Info("client gateway ready")
+end
+
+return Net
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000011"><Properties><string name="Name">NetRoutes</string><ProtectedString name="Source">--!strict
+--[[
+	NetRoutes.luau
+	The canonical list of network route names. Both sides import these constants
+	instead of typing string literals, so a renamed route is a compile-time find,
+	not a silent runtime mismatch.
+]]
+
+local NetRoutes = {
+	-- Client -&gt; server requests (round-trip, return a NetResult).
+	PLACE_BUILDING = "city/place",
+	UPGRADE_BUILDING = "city/upgrade",
+	DEMOLISH_BUILDING = "city/demolish",
+	REPAIR_BUILDING = "city/repair",
+	SET_TAX_RATE = "politics/setTax",
+	SET_GOVERNMENT = "politics/setGovernment",
+	TOGGLE_LAW = "politics/toggleLaw",
+	START_RESEARCH = "research/start",
+	RENAME_NATION = "nation/rename",
+	PROPOSE_TRADE = "diplomacy/propose",
+	RESPOND_TRADE = "diplomacy/respond",
+
+	-- Server -&gt; client pushes.
+	STATE_SYNC = "state/sync",
+	NOTIFY = "state/notify",
+	TRADE_INBOX = "diplomacy/inbox",
+}
+
+return NetRoutes
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000012"><Properties><string name="Name">ResourceMath</string><ProtectedString name="Source">--!strict
+--[[
+	ResourceMath.luau
+	Pure helpers for combining ResourceBags. The server uses these to mutate the
+	authoritative treasury; the client uses the read-only ones (canAfford) to
+	grey out unaffordable options. Keeping the affordability rule in one place
+	guarantees the UI and the server never disagree about what a player can buy.
+]]
+
+local Types = require(script.Parent.Types)
+
+type ResourceBag = Types.ResourceBag
+
+local ResourceMath = {}
+
+--- A fresh zeroed bag over every known resource.
+function ResourceMath.zero(): ResourceBag
+	return {
+		money = 0,
+		materials = 0,
+		energy = 0,
+		food = 0,
+		research = 0,
+		influence = 0,
+	}
+end
+
+--- Non-mutating a + b.
+function ResourceMath.add(a: ResourceBag, b: ResourceBag): ResourceBag
+	local out = table.clone(a)
+	for resource, amount in b do
+		out[resource :: any] = (out[resource :: any] or 0) + amount
+	end
+	return out
+end
+
+--- Non-mutating a * scalar.
+function ResourceMath.scale(a: ResourceBag, scalar: number): ResourceBag
+	local out: ResourceBag = {}
+	for resource, amount in a do
+		out[resource :: any] = amount * scalar
+	end
+	return out
+end
+
+--- True when `wallet` covers every positive cost in `cost`.
+function ResourceMath.canAfford(wallet: ResourceBag, cost: ResourceBag): boolean
+	for resource, amount in cost do
+		if amount &gt; 0 and (wallet[resource :: any] or 0) &lt; amount then
+			return false
+		end
+	end
+	return true
+end
+
+--- Mutating: subtract `cost` from `wallet` in place. Callers must have already
+--- checked canAfford; this does not guard against going negative.
+function ResourceMath.spend(wallet: ResourceBag, cost: ResourceBag)
+	for resource, amount in cost do
+		wallet[resource :: any] = (wallet[resource :: any] or 0) - amount
+	end
+end
+
+--- Mutating: add `gain` to `wallet` in place.
+function ResourceMath.grant(wallet: ResourceBag, gain: ResourceBag)
+	for resource, amount in gain do
+		wallet[resource :: any] = (wallet[resource :: any] or 0) + amount
+	end
+end
+
+return ResourceMath
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000013"><Properties><string name="Name">Signal</string><ProtectedString name="Source">--!strict
+--[[
+	Signal.luau
+	A minimal, original event/observer primitive.
+
+	Roblox's BindableEvents copy arguments and cannot pass some types across the
+	boundary; a plain-table signal is faster and lossless for in-VM messaging.
+	Handlers fire synchronously in subscription order under a pcall so one bad
+	listener cannot break the rest.
+]]
+
+local Signal = {}
+Signal.__index = Signal
+
+export type Connection = {
+	Disconnect: (self: Connection) -&gt; (),
+	Connected: boolean,
+}
+
+export type Signal&lt;T...&gt; = {
+	Connect: (self: Signal&lt;T...&gt;, fn: (T...) -&gt; ()) -&gt; Connection,
+	Once: (self: Signal&lt;T...&gt;, fn: (T...) -&gt; ()) -&gt; Connection,
+	Fire: (self: Signal&lt;T...&gt;, T...) -&gt; (),
+	DisconnectAll: (self: Signal&lt;T...&gt;) -&gt; (),
+	Destroy: (self: Signal&lt;T...&gt;) -&gt; (),
+}
+
+type Handler = {
+	fn: (...any) -&gt; (),
+	connected: boolean,
+	once: boolean,
+}
+
+function Signal.new&lt;T...&gt;(): Signal&lt;T...&gt;
+	local self = setmetatable({
+		_handlers = {} :: { Handler },
+	}, Signal)
+	return (self :: any) :: Signal&lt;T...&gt;
+end
+
+function Signal:Connect(fn: (...any) -&gt; ()): Connection
+	local handler: Handler = { fn = fn, connected = true, once = false }
+	table.insert(self._handlers, handler)
+
+	local connection = {}
+	connection.Connected = true
+	function connection:Disconnect()
+		self.Connected = false
+		handler.connected = false
+	end
+	return connection :: any
+end
+
+function Signal:Once(fn: (...any) -&gt; ()): Connection
+	local handler: Handler = { fn = fn, connected = true, once = true }
+	table.insert(self._handlers, handler)
+
+	local connection = {}
+	connection.Connected = true
+	function connection:Disconnect()
+		self.Connected = false
+		handler.connected = false
+	end
+	return connection :: any
+end
+
+function Signal:Fire(...: any)
+	-- Iterate over a snapshot so handlers may connect/disconnect during firing.
+	local snapshot = table.clone(self._handlers)
+	for _, handler in snapshot do
+		if not handler.connected then
+			continue
+		end
+		if handler.once then
+			handler.connected = false
+		end
+		local ok, err = pcall(handler.fn, ...)
+		if not ok then
+			warn(("[Signal] handler error: %s"):format(tostring(err)))
+		end
+	end
+
+	-- Compact out dead handlers so the list does not grow unbounded.
+	for i = #self._handlers, 1, -1 do
+		if not self._handlers[i].connected then
+			table.remove(self._handlers, i)
+		end
+	end
+end
+
+function Signal:DisconnectAll()
+	for _, handler in self._handlers do
+		handler.connected = false
+	end
+	table.clear(self._handlers)
+end
+
+function Signal:Destroy()
+	self:DisconnectAll()
+end
+
+return Signal
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000014"><Properties><string name="Name">TableUtil</string><ProtectedString name="Source">--!strict
+--[[
+	TableUtil.luau
+	Small, dependency-free helpers used by the data and simulation layers.
+]]
+
+local TableUtil = {}
+
+-- Recursive value copy. Used before mutating persisted state and before
+-- replicating a snapshot to clients (so the client can never hold a live
+-- reference into server-authoritative tables).
+function TableUtil.deepCopy&lt;T&gt;(value: T): T
+	if typeof(value) ~= "table" then
+		return value
+	end
+	local result = {}
+	for k, v in value :: any do
+		result[k] = TableUtil.deepCopy(v)
+	end
+	return (result :: any) :: T
+end
+
+-- Fill any missing keys in `target` from `template` without overwriting existing
+-- values. This is how DataService reconciles an older save against the current
+-- schema: new fields appear with their defaults, existing player data is kept.
+function TableUtil.reconcile&lt;T&gt;(target: { [any]: any }, template: T): T
+	if typeof(template) ~= "table" then
+		return target :: any
+	end
+	for key, templateValue in template :: any do
+		if target[key] == nil then
+			target[key] = TableUtil.deepCopy(templateValue)
+		elseif typeof(templateValue) == "table" and typeof(target[key]) == "table" then
+			TableUtil.reconcile(target[key], templateValue)
+		end
+	end
+	return target :: any
+end
+
+function TableUtil.count(t: { [any]: any }): number
+	local n = 0
+	for _ in t do
+		n += 1
+	end
+	return n
+end
+
+-- Sum a numeric field across a dictionary of records.
+function TableUtil.sumBy&lt;T&gt;(records: { [any]: T }, selector: (T) -&gt; number): number
+	local total = 0
+	for _, record in records do
+		total += selector(record)
+	end
+	return total
+end
+
+function TableUtil.shallowEqual(a: { [any]: any }, b: { [any]: any }): boolean
+	for k, v in a do
+		if b[k] ~= v then
+			return false
+		end
+	end
+	for k, v in b do
+		if a[k] ~= v then
+			return false
+		end
+	end
+	return true
+end
+
+return TableUtil
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000015"><Properties><string name="Name">Types</string><ProtectedString name="Source">--!strict
+--[[
+	Types.luau
+	Central typed-Luau definitions shared by server and client.
+
+	Keeping every cross-boundary shape in one module means the network layer,
+	the data schema, and the UI all agree on the exact structure of a nation's
+	state. When a field changes here, the type checker flags every consumer.
+]]
+
+export type ResourceId = "money" | "materials" | "energy" | "food" | "research" | "influence"
+
+-- A player's stockpile of every tradeable/consumable resource.
+export type ResourceBag = { [ResourceId]: number }
+
+-- One placed building instance owned by a nation.
+export type Building = {
+	id: string, -- unique per-nation building uid
+	kind: string, -- key into Config.Buildings
+	level: number,
+	position: { x: number, z: number }, -- grid coordinates
+	rotation: number, -- 0, 90, 180, 270
+	condition: number, -- 0..1, degrades with age, restored by maintenance
+	builtAt: number, -- os.time() when placed
+	active: boolean, -- powered + staffed?
+}
+
+-- Aggregate, simulated population of a nation.
+export type Population = {
+	total: number,
+	employed: number,
+	happiness: number, -- 0..100
+	education: number, -- 0..100
+	health: number, -- 0..100
+	unrest: number, -- 0..100
+}
+
+export type GovernmentId =
+	"democracy"
+	| "republic"
+	| "monarchy"
+	| "socialist"
+	| "technocracy"
+	| "military"
+	| "authoritarian"
+
+export type Politics = {
+	government: GovernmentId,
+	approval: number, -- 0..100
+	stability: number, -- 0..100
+	corruption: number, -- 0..100
+	taxRate: number, -- 0..1
+	activeLaws: { [string]: boolean },
+	nextElection: number, -- os.time(), 0 if not applicable
+}
+
+export type Economy = {
+	gdp: number,
+	gdpHistory: { number }, -- rolling window for graphs
+	treasury: number,
+	debt: number,
+	inflation: number, -- annualised %, e.g. 2.5
+	interestRate: number, -- %
+	lastTickIncome: number,
+	lastTickExpense: number,
+}
+
+export type Research = {
+	unlocked: { [string]: boolean },
+	current: string?, -- tech id in progress
+	progress: number, -- points accumulated toward `current`
+	points: number, -- unspent research points
+}
+
+-- The full authoritative state for a single nation. This is what the server
+-- simulates, saves, and (in a filtered form) replicates to the owning client.
+export type Nation = {
+	ownerId: number, -- Player.UserId
+	name: string,
+	founded: number, -- os.time()
+	resources: ResourceBag,
+	buildings: { [string]: Building },
+	population: Population,
+	politics: Politics,
+	economy: Economy,
+	research: Research,
+	territory: { regions: { string } },
+	flags: { [string]: boolean }, -- one-time event / tutorial markers
+}
+
+-- The persisted profile envelope. `schemaVersion` drives data migration.
+export type Profile = {
+	schemaVersion: number,
+	createdAt: number,
+	lastPlayed: number,
+	playtime: number,
+	nation: Nation,
+}
+
+-- Standard result envelope returned across the network boundary.
+export type NetResult = {
+	ok: boolean,
+	error: string?,
+	data: any?,
+}
+
+-- Building definition (static config, see Config/Buildings.luau).
+export type BuildingDef = {
+	kind: string,
+	displayName: string,
+	category: string,
+	description: string,
+	footprint: { w: number, h: number }, -- grid tiles
+	requiresTech: string?,
+	maxLevel: number,
+	cost: { [number]: ResourceBag }, -- cost per level (1-indexed)
+	upkeep: ResourceBag, -- per economic tick, at level 1
+	produces: ResourceBag, -- per economic tick, at level 1
+	jobs: number, -- staffing demand at level 1
+	powerDraw: number, -- energy consumed while active
+	powerSupply: number, -- energy produced (for plants)
+	happiness: number, -- flat contribution to citizen happiness
+	housing: number?, -- residents supported (housing buildings)
+	education: number?, -- education service points
+	health: number?, -- health service points
+}
+
+-- Technology definition (Config/Technologies.luau).
+export type TechDef = {
+	id: string,
+	displayName: string,
+	branch: string,
+	description: string,
+	cost: number, -- research points
+	requires: { string }, -- prerequisite tech ids
+	unlocksBuildings: { string },
+	modifiers: { [string]: number }, -- named economy/politics multipliers
+}
+
+return {}
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000016"><Properties><string name="Name">WorldGrid</string><ProtectedString name="Source">--!strict
+--[[
+	WorldGrid.luau
+	The mapping between the logical build grid (integer tiles the server stores)
+	and world-space studs (what the client renders and clicks). Centralising it
+	means placement previews, permanent buildings and click-picking all agree on
+	exactly where a tile is.
+
+	The grid is centred on the world origin. Tile (0,0) is the corner with the
+	most negative X/Z; the ground surface sits at Y = 0.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Constants = require(ReplicatedStorage.Nexus.Constants)
+
+local WorldGrid = {}
+
+local STUDS = Constants.STUDS_PER_TILE
+local SPAN = Constants.GRID_SIZE * STUDS
+local HALF = SPAN / 2
+
+WorldGrid.STUDS = STUDS
+WorldGrid.SPAN = SPAN
+WorldGrid.GROUND_Y = 0
+
+--- World-space centre of a footprint whose corner tile is (x, z) and whose
+--- oriented size is w x h tiles.
+function WorldGrid.footprintCenter(x: number, z: number, w: number, h: number): Vector3
+	local wx = -HALF + (x + w / 2) * STUDS
+	local wz = -HALF + (z + h / 2) * STUDS
+	return Vector3.new(wx, WorldGrid.GROUND_Y, wz)
+end
+
+--- Convert a world position to the tile it falls in, clamped to the grid.
+function WorldGrid.worldToTile(position: Vector3): (number, number)
+	local x = math.floor((position.X + HALF) / STUDS)
+	local z = math.floor((position.Z + HALF) / STUDS)
+	x = math.clamp(x, 0, Constants.GRID_SIZE - 1)
+	z = math.clamp(z, 0, Constants.GRID_SIZE - 1)
+	return x, z
+end
+
+return WorldGrid
+</ProtectedString></Properties></Item></Item></Item><Item class="ServerScriptService" referent="RBX00000048"><Properties></Properties><Item class="Script" referent="RBX00000031"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
+--[[
+	init.server.luau
+	Server bootstrap. Requires every service, registers it with the Framework,
+	then runs the two-phase Init/Start lifecycle. Order of registration does not
+	matter — services reference each other lazily, and Framework guarantees all
+	Inits run before any Start.
+
+	This is the ONLY server Script; everything else is a ModuleScript, which keeps
+	the execution model explicit and testable.
+]]
+
+-- Framework and Services are children of this script (Rojo turns the
+-- folder-with-init into this Script), so we address them from `script`.
+local Framework = require(script.Framework)
+local Services = script.Services
+
+-- Foundational services first (data, transport), then simulation, then I/O.
+local ORDER = {
+	"DataService",
+	"ReplicationService",
+	"NotificationService",
+	"CityService",
+	"CitizenService",
+	"EconomyService",
+	"ResearchService",
+	"PoliticsService",
+}
+
+for _, name in ORDER do
+	local module = Services:FindFirstChild(name)
+	assert(module, "missing service module: " .. name)
+	Framework.register(require(module))
+end
+
+Framework.start()
+
+print("[Nexus] server online — Project Nexus nation simulator")
+</ProtectedString></Properties><Item class="ModuleScript" referent="RBX00000018"><Properties><string name="Name">Framework</string><ProtectedString name="Source">--!strict
+--[[
+	Framework.luau
+	A tiny service locator with a two-phase lifecycle.
+
+	Phase 1 (Init): every service constructs its own state. Services must NOT
+	touch each other here — order is undefined.
+	Phase 2 (Start): the simulation begins. By now every service is registered,
+	so a service may freely `Framework.get("EconomyService")`.
+
+	Services reference one another lazily through `Framework.get`, never via a
+	top-level require, which keeps the dependency graph acyclic at load time.
+]]
+
+local Logger = require(game:GetService("ReplicatedStorage").Nexus.Logger)
+
+local log = Logger.new("Framework")
+
+export type Service = {
+	Name: string,
+	Init: ((self: any) -&gt; ())?,
+	Start: ((self: any) -&gt; ())?,
+	[any]: any,
+}
+
+local Framework = {}
+local services: { [string]: Service } = {}
+local started = false
+
+--- Register a service table. Its `Name` must be unique.
+function Framework.register(service: Service): Service
+	assert(not started, "cannot register after Framework.start()")
+	assert(service.Name, "service is missing a Name")
+	assert(not services[service.Name], "duplicate service: " .. service.Name)
+	services[service.Name] = service
+	return service
+end
+
+--- Retrieve a previously registered service, asserting it exists.
+function Framework.get(name: string): any
+	local service = services[name]
+	if not service then
+		error(("service %q is not registered"):format(name), 2)
+	end
+	return service
+end
+
+--- Run Init on every service, then Start on every service. Idempotent-guarded.
+function Framework.start()
+	assert(not started, "Framework already started")
+	started = true
+
+	for name, service in services do
+		if service.Init then
+			local ok, err = pcall(service.Init, service)
+			if not ok then
+				log:Error(("Init failed for %s: %s"):format(name, tostring(err)))
+			end
+		end
+	end
+	log:Info("all services initialised")
+
+	for name, service in services do
+		if service.Start then
+			-- Start in its own thread so a long-running loop cannot block the
+			-- rest of startup; each service owns its cadence.
+			task.spawn(function()
+				local ok, err = pcall(service.Start, service)
+				if not ok then
+					log:Error(("Start failed for %s: %s"):format(name, tostring(err)))
+				end
+			end)
+		end
+	end
+	log:Info("all services started")
+end
+
+return Framework
+</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000027"><Properties><string name="Name">Services</string></Properties><Item class="ModuleScript" referent="RBX00000019"><Properties><string name="Name">CitizenService</string><ProtectedString name="Source">--!strict
+--[[
+	Services/CitizenService.luau
+	The populace as a living system. Each tick it moves education and health
+	toward what the city's services can support, derives a happiness target from
+	services, taxes, jobs, food and housing, and lets happiness drive migration.
+	Unhappy, hungry or crowded nations shrink; prosperous ones attract residents.
+
+	Population is what makes the economy turn (workers) and what politics answers
+	to (voters), so this service is deliberately the hinge between the two.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Logger = require(ReplicatedStorage.Nexus.Logger)
+local Types = require(ReplicatedStorage.Nexus.Types)
+local Balance = require(ReplicatedStorage.Nexus.Config.Balance)
+
+type Nation = Types.Nation
+
+local log = Logger.new("CitizenService")
+
+local CitizenService = {
+	Name = "CitizenService",
+}
+
+local function clamp(v: number, lo: number, hi: number): number
+	return math.max(lo, math.min(hi, v))
+end
+
+-- Ease a value a fraction of the way toward a target (exponential smoothing).
+local function drift(current: number, target: number, rate: number): number
+	return current + (target - current) * rate
+end
+
+function CitizenService:Tick(nation: Nation, frame: any)
+	local C = Balance.CITIZENS
+	local stats = frame.stats
+	local resolved = frame.resolved
+	local pop = nation.population
+	local total = math.max(pop.total, 1)
+
+	-- Service coverage: points relative to population, capped at full quality.
+	local eduTarget = clamp((stats.education / total) * 200, 0, 100)
+	local healthTarget = clamp((stats.health / total) * 200 + resolved.baseHealthFlat, 0, 100)
+	pop.education = clamp(drift(pop.education, eduTarget, C.serviceInfluence), 0, 100)
+	pop.health = clamp(drift(pop.health, healthTarget, C.serviceInfluence), 0, 100)
+
+	-- Happiness target: sum of every push and pull on public mood.
+	local happiness = C.baseHappiness
+	happiness += stats.happinessFromBuildings
+	happiness += resolved.happinessFlat
+	happiness += (pop.education - 50) * 0.1
+	happiness += (pop.health - 50) * 0.1
+
+	-- Taxes above a comfort threshold sour the public.
+	local taxOver = math.max(0, nation.politics.taxRate - 0.2)
+	happiness -= taxOver * 80
+
+	-- Unemployment beyond tolerance hurts, but is capped so an empty new nation
+	-- (no jobs yet) is a recoverable slump, not an instant collapse.
+	if frame.unemployment &gt; C.unemploymentTolerance then
+		happiness -= math.min(20, (frame.unemployment - C.unemploymentTolerance) * 50)
+	end
+
+	-- Hunger and overcrowding.
+	if frame.foodShortage &gt; 0 then
+		happiness -= math.min(30, frame.foodShortage * 0.5)
+	end
+	local capacity = stats.housing * C.housingMultiplier
+	if total &gt; capacity and capacity &gt; 0 then
+		happiness -= math.min(25, (total - capacity) / capacity * 40)
+	end
+
+	happiness -= pop.unrest * 0.2
+	local happinessTarget = clamp(happiness, 0, 100)
+	pop.happiness = clamp(drift(pop.happiness, happinessTarget, 0.25), 0, 100)
+
+	-- Unrest rises with misery, hunger and corruption; falls otherwise.
+	local unrestTarget = clamp(
+		(50 - pop.happiness) * 0.8
+			+ frame.foodShortage * Balance.ECONOMY.starvationUnrest
+			+ (nation.politics.corruption - 20) * 0.3,
+		0,
+		100
+	)
+	pop.unrest = clamp(drift(pop.unrest, unrestTarget, 0.2), 0, 100)
+
+	-- Migration: happy nations with spare housing grow; miserable ones shrink.
+	local growth = 0
+	if pop.happiness &gt;= C.migrationHappiness and total &lt; capacity then
+		growth = (capacity - total) * C.growthRate * (pop.happiness / 100)
+	elseif pop.happiness &lt; C.migrationHappiness then
+		growth = -(total * C.growthRate * ((C.migrationHappiness - pop.happiness) / 100))
+	elseif total &gt; capacity then
+		growth = -((total - capacity) * C.growthRate)
+	end
+
+	-- Starvation causes outright decline on top of migration.
+	if frame.foodShortage &gt; 0 then
+		growth -= frame.foodShortage * 0.2
+	end
+
+	pop.total = math.max(5, math.floor(total + growth + 0.5))
+end
+
+function CitizenService:Init()
+	log:Debug("citizen simulation ready")
+end
+
+return CitizenService
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000020"><Properties><string name="Name">CityService</string><ProtectedString name="Source">--!strict
+--[[
+	Services/CityService.luau
+	The authoritative city builder. Owns every building a nation places and is
+	the single source of the aggregate "city stats" (production, upkeep, power,
+	jobs, housing, services) that the economy and citizen simulations consume.
+
+	Security: all four mutations (place/upgrade/demolish/repair) are validated
+	end to end on the server — kind exists, tech unlocked, footprint fits and
+	does not overlap, resources actually affordable — before any state changes.
+	The client's request is a suggestion; this service decides.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Constants = require(ReplicatedStorage.Nexus.Constants)
+local Logger = require(ReplicatedStorage.Nexus.Logger)
+local Net = require(ReplicatedStorage.Nexus.Net)
+local NetRoutes = require(ReplicatedStorage.Nexus.NetRoutes)
+local ResourceMath = require(ReplicatedStorage.Nexus.ResourceMath)
+local Types = require(ReplicatedStorage.Nexus.Types)
+local Buildings = require(ReplicatedStorage.Nexus.Config.Buildings)
+local Balance = require(ReplicatedStorage.Nexus.Config.Balance)
+
+local DataService = require(script.Parent.DataService)
+local NotificationService = require(script.Parent.NotificationService)
+local ReplicationService = require(script.Parent.ReplicationService)
+local Modifiers = require(script.Parent.Parent.Util.Modifiers)
+local Validation = require(script.Parent.Parent.Util.Validation)
+
+type Nation = Types.Nation
+type Building = Types.Building
+type BuildingDef = Types.BuildingDef
+type ResourceBag = Types.ResourceBag
+type Resolved = Modifiers.Resolved
+
+export type CityStats = {
+	production: ResourceBag,
+	upkeep: ResourceBag,
+	powerSupply: number,
+	powerDraw: number,
+	powerNet: number,
+	jobs: number,
+	housing: number,
+	education: number,
+	health: number,
+	happinessFromBuildings: number,
+	buildingCount: number,
+}
+
+local log = Logger.new("CityService")
+
+local CityService = {
+	Name = "CityService",
+}
+
+-- ---- Level scaling --------------------------------------------------------
+
+local function prodFactor(level: number): number
+	return 1 + 0.5 * (level - 1)
+end
+local function upkeepFactor(level: number): number
+	return 1 + 0.4 * (level - 1)
+end
+local function jobsFactor(level: number): number
+	return 1 + 0.5 * (level - 1)
+end
+local function housingFactor(level: number): number
+	return 1 + 0.6 * (level - 1)
+end
+
+-- ---- Footprint / grid -----------------------------------------------------
+
+local function orientedFootprint(def: BuildingDef, rotation: number): (number, number)
+	if rotation == 90 or rotation == 270 then
+		return def.footprint.h, def.footprint.w
+	end
+	return def.footprint.w, def.footprint.h
+end
+
+-- Returns the list of "x,z" tile keys a building would occupy, or nil if it
+-- would fall outside the grid.
+local function footprintTiles(pos: { x: number, z: number }, w: number, h: number): ({ string })?
+	if pos.x + w &gt; Constants.GRID_SIZE or pos.z + h &gt; Constants.GRID_SIZE then
+		return nil
+	end
+	local tiles = {}
+	for dx = 0, w - 1 do
+		for dz = 0, h - 1 do
+			table.insert(tiles, (pos.x + dx) .. "," .. (pos.z + dz))
+		end
+	end
+	return tiles
+end
+
+-- Build the set of occupied tiles for a nation, optionally ignoring one uid
+-- (used when re-checking during an upgrade in place).
+local function occupancy(nation: Nation, excludeId: string?): { [string]: boolean }
+	local occupied = {}
+	for id, building in nation.buildings do
+		if id == excludeId then
+			continue
+		end
+		local def = Buildings[building.kind]
+		if not def then
+			continue
+		end
+		local w, h = orientedFootprint(def, building.rotation)
+		local tiles = footprintTiles(building.position, w, h)
+		if tiles then
+			for _, key in tiles do
+				occupied[key] = true
+			end
+		end
+	end
+	return occupied
+end
+
+-- ---- Cost -----------------------------------------------------------------
+
+-- Cost of a building at a given level, with the material-cost modifier applied.
+local function effectiveCost(def: BuildingDef, level: number, resolved: Resolved): ResourceBag
+	local base = def.cost[level]
+	if not base then
+		return {}
+	end
+	local out = table.clone(base)
+	if out.materials then
+		out.materials = math.max(0, math.floor(out.materials * resolved.materialCostMult + 0.5))
+	end
+	return out
+end
+
+-- ---- Aggregate stats ------------------------------------------------------
+
+--- Recompute the entire city's contribution to the simulation. Called every
+--- economy tick and never trusts stored derived values.
+function CityService:ComputeStats(nation: Nation, resolved: Resolved): CityStats
+	local stats: CityStats = {
+		production = ResourceMath.zero(),
+		upkeep = ResourceMath.zero(),
+		powerSupply = 0,
+		powerDraw = 0,
+		powerNet = 0,
+		jobs = 0,
+		housing = 0,
+		education = 0,
+		health = 0,
+		happinessFromBuildings = 0,
+		buildingCount = 0,
+	}
+	local offline = Balance.CONSTRUCTION.offlineCondition
+
+	-- First pass: total power. A plant contributes if its condition is healthy.
+	for _, b in nation.buildings do
+		local def = Buildings[b.kind]
+		if not def or b.condition &lt; offline then
+			continue
+		end
+		stats.powerSupply += def.powerSupply * prodFactor(b.level) * resolved.powerSupplyMult
+		stats.powerDraw += def.powerDraw * prodFactor(b.level)
+	end
+	stats.powerNet = stats.powerSupply - stats.powerDraw
+	local powerRatio = 1.0
+	if stats.powerDraw &gt; stats.powerSupply and stats.powerDraw &gt; 0 then
+		powerRatio = stats.powerSupply / stats.powerDraw
+	end
+
+	-- Second pass: production, upkeep, jobs, services.
+	for _, b in nation.buildings do
+		local def = Buildings[b.kind]
+		if not def then
+			continue
+		end
+		stats.buildingCount += 1
+		local healthy = b.condition &gt;= offline
+		b.active = healthy
+		if not healthy then
+			-- A derelict building still bleeds a little upkeep but produces nothing.
+			continue
+		end
+		-- Power-consuming producers are throttled by the supply ratio.
+		local eff = def.powerDraw &gt; 0 and powerRatio or 1.0
+
+		for resource, amount in def.produces do
+			local value = amount * prodFactor(b.level) * eff
+			if resource == "food" then
+				value *= resolved.foodProductionMult
+			elseif resource == "influence" then
+				value *= resolved.influenceBonusMult
+			end
+			stats.production[resource :: any] += value
+		end
+
+		for resource, amount in def.upkeep do
+			stats.upkeep[resource :: any] += amount * upkeepFactor(b.level) * resolved.upkeepMult
+		end
+
+		local jobFactor = jobsFactor(b.level)
+		if def.category == "Industry" then
+			jobFactor *= resolved.industryJobsMult
+		end
+		stats.jobs += def.jobs * jobFactor
+
+		stats.housing += (def.housing or 0) * housingFactor(b.level)
+		stats.education += (def.education or 0) * prodFactor(b.level) * eff
+		stats.health += (def.health or 0) * prodFactor(b.level) * eff
+		stats.happinessFromBuildings += def.happiness
+	end
+
+	return stats
+end
+
+--- Age every building. When the treasury covered maintenance, buildings slowly
+--- recover; otherwise they decay and eventually go offline.
+function CityService:TickCondition(nation: Nation, maintained: boolean)
+	local decay = Balance.CONSTRUCTION.decayPerTick
+	for _, b in nation.buildings do
+		if maintained then
+			b.condition = math.min(1, b.condition + decay * 0.5)
+		else
+			b.condition = math.max(0, b.condition - decay * 3)
+		end
+	end
+end
+
+-- ---- Mutations ------------------------------------------------------------
+
+local uidCounter = 0
+local function newUid(): string
+	uidCounter += 1
+	return ("b%d_%d"):format(os.time() % 100000, uidCounter)
+end
+
+function CityService:_place(player: Player, payload: any): any
+	local nation = DataService:GetNation(player)
+	if not nation then
+		return { success = false, reason = "no_nation" }
+	end
+	if typeof(payload) ~= "table" then
+		return { success = false, reason = "bad_payload" }
+	end
+
+	local def = Buildings[payload.kind]
+	if not def then
+		return { success = false, reason = "unknown_building" }
+	end
+	if def.requiresTech and not nation.research.unlocked[def.requiresTech] then
+		return { success = false, reason = "tech_locked" }
+	end
+	local pos = Validation.readPosition(payload)
+	if not pos then
+		return { success = false, reason = "bad_position" }
+	end
+	local rotation = payload.rotation
+	if not Validation.isRotation(rotation) then
+		rotation = 0
+	end
+
+	local w, h = orientedFootprint(def, rotation)
+	local tiles = footprintTiles(pos, w, h)
+	if not tiles then
+		return { success = false, reason = "out_of_bounds" }
+	end
+	local occupied = occupancy(nation)
+	for _, key in tiles do
+		if occupied[key] then
+			return { success = false, reason = "overlap" }
+		end
+	end
+
+	local resolved = Modifiers.resolve(nation)
+	local cost = effectiveCost(def, 1, resolved)
+	if not ResourceMath.canAfford(nation.resources, cost) then
+		NotificationService:Send(player, "warning", "Cannot afford " .. def.displayName)
+		return { success = false, reason = "insufficient_resources" }
+	end
+
+	ResourceMath.spend(nation.resources, cost)
+	local id = newUid()
+	nation.buildings[id] = {
+		id = id,
+		kind = def.kind,
+		level = 1,
+		position = pos,
+		rotation = rotation,
+		condition = 1,
+		builtAt = os.time(),
+		active = true,
+	}
+
+	ReplicationService:MarkDirty(player)
+	NotificationService:Send(player, "success", def.displayName .. " built")
+	return { success = true, id = id }
+end
+
+function CityService:_upgrade(player: Player, payload: any): any
+	local nation = DataService:GetNation(player)
+	if not nation or typeof(payload) ~= "table" then
+		return { success = false, reason = "bad_request" }
+	end
+	local building = nation.buildings[payload.id]
+	if not building then
+		return { success = false, reason = "not_found" }
+	end
+	local def = Buildings[building.kind]
+	if not def then
+		return { success = false, reason = "unknown_building" }
+	end
+	local cap = math.min(def.maxLevel, Balance.CONSTRUCTION.maxLevel)
+	if building.level &gt;= cap then
+		return { success = false, reason = "max_level" }
+	end
+
+	local resolved = Modifiers.resolve(nation)
+	local cost = effectiveCost(def, building.level + 1, resolved)
+	if not ResourceMath.canAfford(nation.resources, cost) then
+		NotificationService:Send(player, "warning", "Cannot afford upgrade")
+		return { success = false, reason = "insufficient_resources" }
+	end
+
+	ResourceMath.spend(nation.resources, cost)
+	building.level += 1
+	building.condition = 1
+	ReplicationService:MarkDirty(player)
+	NotificationService:Send(player, "success", def.displayName .. " upgraded to level " .. building.level)
+	return { success = true, level = building.level }
+end
+
+function CityService:_demolish(player: Player, payload: any): any
+	local nation = DataService:GetNation(player)
+	if not nation or typeof(payload) ~= "table" then
+		return { success = false, reason = "bad_request" }
+	end
+	local building = nation.buildings[payload.id]
+	if not building then
+		return { success = false, reason = "not_found" }
+	end
+	local def = Buildings[building.kind]
+	if def then
+		local resolved = Modifiers.resolve(nation)
+		local refund = ResourceMath.scale(
+			effectiveCost(def, building.level, resolved),
+			Balance.CONSTRUCTION.demolishRefund
+		)
+		ResourceMath.grant(nation.resources, refund)
+	end
+	nation.buildings[payload.id] = nil
+	ReplicationService:MarkDirty(player)
+	NotificationService:Send(player, "info", "Building demolished")
+	return { success = true }
+end
+
+function CityService:_repair(player: Player, payload: any): any
+	local nation = DataService:GetNation(player)
+	if not nation or typeof(payload) ~= "table" then
+		return { success = false, reason = "bad_request" }
+	end
+	local building = nation.buildings[payload.id]
+	if not building then
+		return { success = false, reason = "not_found" }
+	end
+	local def = Buildings[building.kind]
+	if not def then
+		return { success = false, reason = "unknown_building" }
+	end
+	if building.condition &gt;= 0.99 then
+		return { success = false, reason = "already_good" }
+	end
+
+	local resolved = Modifiers.resolve(nation)
+	-- Repair costs a fifth of the current level's build cost, scaled by damage.
+	local damage = 1 - building.condition
+	local cost = ResourceMath.scale(effectiveCost(def, building.level, resolved), 0.2 * damage)
+	if not ResourceMath.canAfford(nation.resources, cost) then
+		return { success = false, reason = "insufficient_resources" }
+	end
+	ResourceMath.spend(nation.resources, cost)
+	building.condition = 1
+	ReplicationService:MarkDirty(player)
+	return { success = true }
+end
+
+function CityService:Start()
+	Net.handleRequest(NetRoutes.PLACE_BUILDING, function(player, payload)
+		return self:_place(player, payload)
+	end, { rate = 10, per = 1 })
+
+	Net.handleRequest(NetRoutes.UPGRADE_BUILDING, function(player, payload)
+		return self:_upgrade(player, payload)
+	end, { rate = 10, per = 1 })
+
+	Net.handleRequest(NetRoutes.DEMOLISH_BUILDING, function(player, payload)
+		return self:_demolish(player, payload)
+	end, { rate = 10, per = 1 })
+
+	Net.handleRequest(NetRoutes.REPAIR_BUILDING, function(player, payload)
+		return self:_repair(player, payload)
+	end, { rate = 10, per = 1 })
+
+	log:Info("construction handlers ready")
+end
+
+return CityService
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000021"><Properties><string name="Name">DataService</string><ProtectedString name="Source">--!strict
+--[[
+	Services/DataService.luau
+	Original, session-safe persistence for player profiles.
+
+	Design goals (all implemented here, no external dependency):
+	  * Session locking  — one live server owns a profile at a time, so a player
+	    hopping servers can never fork or roll back their own save.
+	  * Reconciliation   — an old save is merged against the current default
+	    template, so new fields appear without wiping player progress.
+	  * Migration        — schemaVersion drives ordered upgrade steps.
+	  * Retry + backoff  — every DataStore op is retried with exponential backoff.
+	  * Backups          — the last-known-good record is mirrored to a second
+	    store before each risky write.
+	  * Autosave         — periodic saves plus a BindToClose flush on shutdown.
+	  * Studio fallback   — if the DataStore API is unreachable (API access off),
+	    an in-memory mock keeps the whole game playable for testing.
+
+	Other services never call DataStores; they read and mutate `profile.nation`
+	and rely on this service to persist it.
+]]
+
+local DataStoreService = game:GetService("DataStoreService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local Constants = require(ReplicatedStorage.Nexus.Constants)
+local Logger = require(ReplicatedStorage.Nexus.Logger)
+local Signal = require(ReplicatedStorage.Nexus.Signal)
+local TableUtil = require(ReplicatedStorage.Nexus.TableUtil)
+local Types = require(ReplicatedStorage.Nexus.Types)
+local Balance = require(ReplicatedStorage.Nexus.Config.Balance)
+
+type Profile = Types.Profile
+type Nation = Types.Nation
+
+-- A stored record wraps the profile with an ownership lock.
+type SessionLock = { jobId: string, placeId: number, time: number }
+type Record = { profile: Profile?, lock: SessionLock? }
+
+local log = Logger.new("DataService")
+
+-- ---------------------------------------------------------------------------
+-- Store abstraction: real DataStore or in-memory mock (Studio without API).
+-- ---------------------------------------------------------------------------
+
+type StoreLike = {
+	UpdateAsync: (self: any, key: string, transform: (any) -&gt; any) -&gt; any,
+	GetAsync: (self: any, key: string) -&gt; any,
+	SetAsync: (self: any, key: string, value: any) -&gt; (),
+}
+
+local MockStore = {}
+MockStore.__index = MockStore
+function MockStore.new(): StoreLike
+	return (setmetatable({ _data = {} }, MockStore) :: any) :: StoreLike
+end
+function MockStore:UpdateAsync(key: string, transform: (any) -&gt; any): any
+	local current = self._data[key]
+	local updated = transform(current)
+	if updated ~= nil then
+		self._data[key] = TableUtil.deepCopy(updated)
+	end
+	return updated
+end
+function MockStore:GetAsync(key: string): any
+	return TableUtil.deepCopy(self._data[key])
+end
+function MockStore:SetAsync(key: string, value: any)
+	self._data[key] = TableUtil.deepCopy(value)
+end
+
+-- ---------------------------------------------------------------------------
+-- Service
+-- ---------------------------------------------------------------------------
+
+local DataService = {
+	Name = "DataService",
+	Loaded = Signal.new() :: any, -- fires (player, profile)
+	Released = Signal.new() :: any, -- fires (player)
+}
+
+DataService._profiles = {} :: { [number]: Profile }
+DataService._loading = {} :: { [number]: boolean }
+DataService._store = nil :: StoreLike?
+DataService._backupStore = nil :: StoreLike?
+DataService._useMock = false
+
+-- Migration steps: index N upgrades a vN profile to v(N+1) in place.
+local MIGRATIONS: { [number]: (Profile) -&gt; () } = {
+	-- [1] = function(profile) ... end,  -- add when schema bumps to v2
+}
+
+-- ---- Default profile ------------------------------------------------------
+
+local function defaultNation(player: Player): Nation
+	local start = Balance.START
+	return {
+		ownerId = player.UserId,
+		name = player.DisplayName .. "'s Nation",
+		founded = os.time(),
+		resources = TableUtil.deepCopy(start.resources),
+		buildings = {},
+		population = {
+			total = start.population,
+			employed = 0,
+			happiness = 60,
+			education = 20,
+			health = 40,
+			unrest = 0,
+		},
+		politics = {
+			government = "democracy",
+			approval = 60,
+			stability = 60,
+			corruption = 5,
+			taxRate = start.taxRate,
+			activeLaws = {},
+			nextElection = 0,
+		},
+		economy = {
+			gdp = 0,
+			gdpHistory = {},
+			treasury = start.treasury,
+			debt = 0,
+			inflation = 2.0,
+			interestRate = 4.0,
+			lastTickIncome = 0,
+			lastTickExpense = 0,
+		},
+		research = {
+			unlocked = {},
+			current = nil,
+			progress = 0,
+			points = 0,
+		},
+		territory = { regions = { "capital" } },
+		flags = {},
+	}
+end
+
+local function defaultProfile(player: Player): Profile
+	return {
+		schemaVersion = Constants.PROFILE_SCHEMA_VERSION,
+		createdAt = os.time(),
+		lastPlayed = os.time(),
+		playtime = 0,
+		nation = defaultNation(player),
+	}
+end
+
+-- ---- DataStore helpers with retry + backoff -------------------------------
+
+local function keyFor(userId: number): string
+	return "player_" .. userId
+end
+
+local function sameSession(lock: SessionLock?): boolean
+	return lock ~= nil and lock.jobId == game.JobId and lock.placeId == game.PlaceId
+end
+
+local function lockIsStale(lock: SessionLock): boolean
+	return (os.time() - lock.time) &gt; Constants.SESSION_LOCK_STALE_AFTER
+end
+
+-- Retry any DataStore call with exponential backoff. Returns ok, result.
+local function retry&lt;T&gt;(label: string, fn: () -&gt; T): (boolean, T?)
+	local delayTime = 1
+	for attempt = 1, Constants.DATASTORE_MAX_RETRIES do
+		local ok, result = pcall(fn)
+		if ok then
+			return true, result
+		end
+		log:Warn(("%s attempt %d failed: %s"):format(label, attempt, tostring(result)))
+		if attempt &lt; Constants.DATASTORE_MAX_RETRIES then
+			task.wait(delayTime)
+			delayTime = math.min(delayTime * 2, 16)
+		end
+	end
+	return false, nil
+end
+
+function DataService:Init()
+	if RunService:IsStudio() then
+		-- Probe the DataStore API; fall back to an in-memory mock if it is off.
+		local probe = DataStoreService:GetDataStore(Constants.DATASTORE_NAME)
+		local ok = pcall(function()
+			-- Returning nil cancels the write, so this only exercises the API.
+			probe:UpdateAsync("__probe__", function()
+				return nil
+			end)
+		end)
+		if not ok then
+			self._useMock = true
+			log:Warn("DataStore API unavailable — using in-memory mock (Studio only)")
+		end
+	end
+
+	if self._useMock then
+		self._store = MockStore.new()
+		self._backupStore = MockStore.new()
+	else
+		self._store = DataStoreService:GetDataStore(Constants.DATASTORE_NAME)
+		self._backupStore = DataStoreService:GetDataStore(Constants.DATASTORE_BACKUP_NAME)
+	end
+end
+
+-- ---- Load -----------------------------------------------------------------
+
+function DataService:_migrate(profile: Profile)
+	while profile.schemaVersion &lt; Constants.PROFILE_SCHEMA_VERSION do
+		local step = MIGRATIONS[profile.schemaVersion]
+		if step then
+			step(profile)
+		end
+		profile.schemaVersion += 1
+	end
+end
+
+function DataService:_loadAsync(player: Player): Profile?
+	local key = keyFor(player.UserId)
+	local store = assert(self._store, "store not initialised")
+
+	-- Acquire the session lock. If another live session holds a fresh lock, we
+	-- back off and retry; a stale lock is reclaimed.
+	local acquired: Record? = nil
+	for attempt = 1, Constants.DATASTORE_MAX_RETRIES do
+		local ok, record = retry("load:" .. key, function(): Record
+			return store:UpdateAsync(key, function(old: Record?): Record?
+				local rec: Record = old or { profile = nil, lock = nil }
+				local lock = rec.lock
+				if lock and not sameSession(lock) and not lockIsStale(lock) then
+					-- Owned elsewhere and fresh: abort this write, retry later.
+					return nil
+				end
+				rec.lock = { jobId = game.JobId, placeId = game.PlaceId, time = os.time() }
+				return rec
+			end)
+		end)
+
+		if ok and record and sameSession(record.lock) then
+			acquired = record
+			break
+		end
+		log:Warn(("profile %s locked elsewhere, retry %d"):format(key, attempt))
+		task.wait(2 ^ attempt)
+	end
+
+	if not acquired then
+		return nil
+	end
+
+	local profile = acquired.profile
+	if not profile then
+		profile = defaultProfile(player)
+	else
+		-- Bring an older save up to the current shape and schema.
+		self:_migrate(profile)
+		TableUtil.reconcile(profile, defaultProfile(player))
+		-- Reconcile the nested nation too, so new nation fields get defaults.
+		TableUtil.reconcile(profile.nation, defaultNation(player))
+	end
+	profile.lastPlayed = os.time()
+	return profile
+end
+
+function DataService:LoadPlayer(player: Player)
+	if self._loading[player.UserId] or self._profiles[player.UserId] then
+		return
+	end
+	self._loading[player.UserId] = true
+
+	local profile = self:_loadAsync(player)
+	self._loading[player.UserId] = nil
+
+	if not player.Parent then
+		-- Player left mid-load; release the lock we may have taken.
+		if profile then
+			self:_saveAsync(player.UserId, profile, true)
+		end
+		return
+	end
+
+	if not profile then
+		log:Error(("could not load profile for %s; kicking to protect data"):format(player.Name))
+		player:Kick("Your save is in use on another server. Please rejoin in a moment.")
+		return
+	end
+
+	self._profiles[player.UserId] = profile
+	log:Info(("loaded profile for %s (v%d)"):format(player.Name, profile.schemaVersion))
+	self.Loaded:Fire(player, profile)
+end
+
+-- ---- Save -----------------------------------------------------------------
+
+function DataService:_saveAsync(userId: number, profile: Profile, releaseLock: boolean): boolean
+	local key = keyFor(userId)
+	local store = assert(self._store, "store not initialised")
+
+	-- Snapshot the profile so a concurrent simulation tick cannot mutate the
+	-- table while the DataStore is serialising it.
+	local snapshot = TableUtil.deepCopy(profile)
+
+	-- Mirror the last-good profile to the backup store first (best effort).
+	retry("backup:" .. key, function()
+		(assert(self._backupStore) :: any):SetAsync(key, { profile = snapshot, savedAt = os.time() })
+	end)
+
+	local ok = retry("save:" .. key, function()
+		store:UpdateAsync(key, function(old: Record?): Record?
+			local rec: Record = old or {}
+			local lock = rec.lock
+			-- Refuse to clobber a save owned by a different, still-live session.
+			if lock and not sameSession(lock) and not lockIsStale(lock) then
+				return nil
+			end
+			rec.profile = snapshot
+			if releaseLock then
+				rec.lock = nil
+			else
+				rec.lock = { jobId = game.JobId, placeId = game.PlaceId, time = os.time() }
+			end
+			return rec
+		end)
+	end)
+	return ok == true
+end
+
+function DataService:SaveNow(player: Player): boolean
+	local profile = self._profiles[player.UserId]
+	if not profile then
+		return false
+	end
+	return self:_saveAsync(player.UserId, profile, false)
+end
+
+function DataService:ReleasePlayer(player: Player)
+	local profile = self._profiles[player.UserId]
+	if not profile then
+		return
+	end
+	self._profiles[player.UserId] = nil
+	self:_saveAsync(player.UserId, profile, true)
+	log:Info(("released profile for %s"):format(player.Name))
+	self.Released:Fire(player)
+end
+
+-- ---- Accessors ------------------------------------------------------------
+
+function DataService:GetProfile(player: Player): Profile?
+	return self._profiles[player.UserId]
+end
+
+function DataService:GetNation(player: Player): Nation?
+	local profile = self._profiles[player.UserId]
+	return profile and profile.nation or nil
+end
+
+--- Iterate every loaded (player, nation) pair. Used by simulation ticks.
+function DataService:ForEachNation(fn: (player: Player, nation: Nation) -&gt; ())
+	for _, player in Players:GetPlayers() do
+		local nation = self:GetNation(player)
+		if nation then
+			fn(player, nation)
+		end
+	end
+end
+
+-- ---- Lifecycle ------------------------------------------------------------
+
+function DataService:Start()
+	Players.PlayerAdded:Connect(function(player)
+		self:LoadPlayer(player)
+	end)
+	for _, player in Players:GetPlayers() do
+		task.spawn(function()
+			self:LoadPlayer(player)
+		end)
+	end
+	Players.PlayerRemoving:Connect(function(player)
+		self:ReleasePlayer(player)
+	end)
+
+	-- Autosave loop.
+	task.spawn(function()
+		while true do
+			task.wait(Constants.AUTOSAVE_INTERVAL)
+			for userId, profile in self._profiles do
+				profile.playtime += Constants.AUTOSAVE_INTERVAL
+				self:_saveAsync(userId, profile, false)
+			end
+		end
+	end)
+
+	-- Flush everything on shutdown.
+	game:BindToClose(function()
+		if self._useMock then
+			return
+		end
+		for userId, profile in self._profiles do
+			task.spawn(function()
+				self:_saveAsync(userId, profile, true)
+			end)
+		end
+		task.wait(3)
+	end)
+end
+
+return DataService
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000022"><Properties><string name="Name">EconomyService</string><ProtectedString name="Source">--!strict
+--[[
+	Services/EconomyService.luau
+	The master simulation tick. Every ECONOMY_TICK it walks each live nation and,
+	in a fixed order, resolves modifiers, aggregates the city, computes finance,
+	moves resources, and hands a shared "frame" of derived numbers to the citizen
+	and research simulations. Politics runs on its own slower cadence.
+
+	All money is authoritative here. `nation.resources.money` is the single
+	treasury; deficits become debt (money never goes negative), surpluses slowly
+	repay debt. Everything the HUD shows as a flow is packaged into `frame` and
+	handed to ReplicationService.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Constants = require(ReplicatedStorage.Nexus.Constants)
+local Logger = require(ReplicatedStorage.Nexus.Logger)
+local Types = require(ReplicatedStorage.Nexus.Types)
+local Balance = require(ReplicatedStorage.Nexus.Config.Balance)
+
+local CityService = require(script.Parent.CityService)
+local DataService = require(script.Parent.DataService)
+local NotificationService = require(script.Parent.NotificationService)
+local ReplicationService = require(script.Parent.ReplicationService)
+local Modifiers = require(script.Parent.Parent.Util.Modifiers)
+
+type Nation = Types.Nation
+
+local log = Logger.new("EconomyService")
+
+local EconomyService = {
+	Name = "EconomyService",
+}
+
+local function clamp(v: number, lo: number, hi: number): number
+	return math.max(lo, math.min(hi, v))
+end
+
+-- Corruption erodes tax efficiency, but never below half.
+local function corruptionFactor(corruption: number): number
+	return clamp(1 - corruption / 200, 0.5, 1)
+end
+
+--- Run one economic tick for a single nation. Returns the derived `frame` so
+--- other simulations (and replication) can reuse the same numbers.
+function EconomyService:Tick(nation: Nation): any
+	local eco = Balance.ECONOMY
+	local resolved = Modifiers.resolve(nation)
+	local stats = CityService:ComputeStats(nation, resolved)
+
+	-- Employment: a fraction of the population is working-age.
+	local workforce = math.floor(nation.population.total * Balance.CITIZENS.participation)
+	local employed = math.min(math.floor(stats.jobs), workforce)
+	nation.population.employed = employed
+	local unemployment = workforce &gt; 0 and (workforce - employed) / workforce or 0
+
+	-- GDP and taxation. Labour income is taxed; state enterprises pay directly.
+	local laborGdp = employed * eco.gdpPerWorker
+	local enterpriseIncome = stats.production.money
+	local gdp = laborGdp + enterpriseIncome
+	local taxRevenue = laborGdp
+		* nation.politics.taxRate
+		* resolved.taxEfficiencyMult
+		* eco.taxEfficiency
+		* corruptionFactor(nation.politics.corruption)
+	local income = taxRevenue + enterpriseIncome
+
+	-- Materials: mines add, factories consume. A shortfall means we could not
+	-- fully maintain the city this tick.
+	local materialsFlow = stats.production.materials - stats.upkeep.materials
+	local res = nation.resources
+	local maintainedMaterials = true
+	res.materials += materialsFlow
+	if res.materials &lt; 0 then
+		maintainedMaterials = false
+		res.materials = 0
+	end
+
+	-- Debt interest and money-denominated upkeep.
+	local interest = nation.economy.debt &gt; 0
+			and nation.economy.debt * (nation.economy.interestRate / 100) / eco.ticksPerYear
+		or 0
+	local expense = stats.upkeep.money + interest
+
+	res.money += income
+	res.money -= expense
+	local maintainedMoney = true
+	if res.money &lt; 0 then
+		-- Deficit is financed by borrowing.
+		maintainedMoney = false
+		nation.economy.debt += -res.money
+		res.money = 0
+	elseif nation.economy.debt &gt; 0 then
+		-- Repay a slice of the debt out of any surplus.
+		local paydown = math.min(res.money * eco.debtRepayFraction, nation.economy.debt)
+		res.money -= paydown
+		nation.economy.debt -= paydown
+	end
+
+	-- Food: production feeds the population; a shortfall is reported for unrest.
+	local consumption = nation.population.total * eco.foodPerCapita
+	res.food += stats.production.food - consumption
+	local foodShortage = 0
+	if res.food &lt; 0 then
+		foodShortage = -res.food
+		res.food = 0
+	end
+
+	-- Research and influence accumulate as resources; energy shows the net flow.
+	res.research += stats.production.research
+	res.influence += stats.production.influence
+	res.energy = stats.powerNet
+
+	-- Inflation drifts toward target under money-supply pressure.
+	local pressure = (income - expense) / math.max(gdp, 1)
+	nation.economy.inflation += (eco.inflationTarget - nation.economy.inflation) * eco.inflationDrift
+		+ pressure * eco.inflationDrift
+	nation.economy.inflation = clamp(nation.economy.inflation, -5, 30)
+
+	-- Update the economy mirror + rolling GDP history for graphs.
+	nation.economy.gdp = gdp
+	nation.economy.treasury = res.money
+	nation.economy.lastTickIncome = income
+	nation.economy.lastTickExpense = expense
+	nation.economy.interestRate = eco.baseInterestRate + nation.economy.inflation * 0.5
+	local history = nation.economy.gdpHistory
+	table.insert(history, gdp)
+	while #history &gt; Constants.GDP_HISTORY_LENGTH do
+		table.remove(history, 1)
+	end
+
+	local maintained = maintainedMoney and maintainedMaterials
+
+	return {
+		stats = stats,
+		resolved = resolved,
+		gdp = gdp,
+		income = income,
+		expense = expense,
+		net = income - expense,
+		taxRevenue = taxRevenue,
+		enterpriseIncome = enterpriseIncome,
+		employed = employed,
+		workforce = workforce,
+		unemployment = unemployment,
+		foodShortage = foodShortage,
+		maintained = maintained,
+		debt = nation.economy.debt,
+		inflation = nation.economy.inflation,
+	}
+end
+
+function EconomyService:Start()
+	local CitizenService = require(script.Parent.CitizenService)
+	local ResearchService = require(script.Parent.ResearchService)
+
+	task.spawn(function()
+		while true do
+			task.wait(Constants.ECONOMY_TICK)
+			DataService:ForEachNation(function(player, nation)
+				local ok, frame = pcall(function()
+					return self:Tick(nation)
+				end)
+				if not ok then
+					log:Error(("economy tick failed for %s: %s"):format(player.Name, tostring(frame)))
+					return
+				end
+
+				-- Downstream simulations reuse this tick's derived numbers.
+				pcall(function()
+					CitizenService:Tick(nation, frame)
+				end)
+				pcall(function()
+					ResearchService:Tick(player, nation, frame)
+				end)
+				CityService:TickCondition(nation, frame.maintained)
+
+				if frame.foodShortage &gt; 5 then
+					NotificationService:Send(player, "warning", "Food shortage", "Citizens are going hungry.")
+				end
+				if frame.stats.powerNet &lt; 0 then
+					NotificationService:Send(player, "warning", "Power shortage", "Build more power plants.")
+				end
+
+				-- Package HUD-facing derived stats and schedule a snapshot.
+				ReplicationService:SetStats(player, {
+					gdp = frame.gdp,
+					income = frame.income,
+					expense = frame.expense,
+					net = frame.net,
+					employed = frame.employed,
+					workforce = frame.workforce,
+					unemployment = frame.unemployment,
+					powerNet = frame.stats.powerNet,
+					powerSupply = frame.stats.powerSupply,
+					powerDraw = frame.stats.powerDraw,
+					jobs = frame.stats.jobs,
+					housing = frame.stats.housing,
+					buildingCount = frame.stats.buildingCount,
+					debt = frame.debt,
+					inflation = frame.inflation,
+				})
+				ReplicationService:MarkDirty(player)
+			end)
+		end
+	end)
+
+	log:Info("economy simulation running")
+end
+
+return EconomyService
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000023"><Properties><string name="Name">NotificationService</string><ProtectedString name="Source">--!strict
+--[[
+	Services/NotificationService.luau
+	Server-authored, transient messages to a player's HUD: "Not enough
+	materials", "Election won", "Power shortage". Purely presentational — no
+	state lives here — but centralising it keeps a consistent shape and severity
+	vocabulary across every service.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Net = require(ReplicatedStorage.Nexus.Net)
+local NetRoutes = require(ReplicatedStorage.Nexus.NetRoutes)
+
+export type Severity = "info" | "success" | "warning" | "error"
+
+local NotificationService = {
+	Name = "NotificationService",
+}
+
+function NotificationService:Send(player: Player, severity: Severity, title: string, body: string?)
+	Net.fireClient(player, NetRoutes.NOTIFY, {
+		severity = severity,
+		title = title,
+		body = body,
+		at = os.time(),
+	})
+end
+
+function NotificationService:Broadcast(severity: Severity, title: string, body: string?)
+	Net.fireAllClients(NetRoutes.NOTIFY, {
+		severity = severity,
+		title = title,
+		body = body,
+		at = os.time(),
+	})
+end
+
+return NotificationService
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000024"><Properties><string name="Name">PoliticsService</string><ProtectedString name="Source">--!strict
+--[[
+	Services/PoliticsService.luau
+	Government, laws and the public's verdict on your rule. Players set the tax
+	rate, switch government type (a strategic pivot that costs influence), and
+	enact/repeal laws. On its own slower cadence the service settles approval,
+	stability and corruption from the state of the nation, and — for elective
+	governments — holds elections you can lose.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Logger = require(ReplicatedStorage.Nexus.Logger)
+local Net = require(ReplicatedStorage.Nexus.Net)
+local NetRoutes = require(ReplicatedStorage.Nexus.NetRoutes)
+local Types = require(ReplicatedStorage.Nexus.Types)
+local Balance = require(ReplicatedStorage.Nexus.Config.Balance)
+local Governments = require(ReplicatedStorage.Nexus.Config.Governments)
+local Laws = require(ReplicatedStorage.Nexus.Config.Laws)
+
+local DataService = require(script.Parent.DataService)
+local NotificationService = require(script.Parent.NotificationService)
+local ReplicationService = require(script.Parent.ReplicationService)
+local Modifiers = require(script.Parent.Parent.Util.Modifiers)
+
+type Nation = Types.Nation
+
+local GOVERNMENT_SWITCH_COST = 100 -- influence
+
+local log = Logger.new("PoliticsService")
+
+local PoliticsService = {
+	Name = "PoliticsService",
+}
+
+local function clamp(v: number, lo: number, hi: number): number
+	return math.max(lo, math.min(hi, v))
+end
+
+local function drift(current: number, target: number, rate: number): number
+	return current + (target - current) * rate
+end
+
+-- ---- Handlers -------------------------------------------------------------
+
+function PoliticsService:_setTax(player: Player, payload: any): any
+	local nation = DataService:GetNation(player)
+	if not nation or typeof(payload) ~= "table" or typeof(payload.rate) ~= "number" then
+		return { success = false, reason = "bad_request" }
+	end
+	local gov = Governments[nation.politics.government]
+	local ceiling = gov and gov.modifiers.taxCeiling or 0.5
+	if payload.rate ~= payload.rate then -- NaN guard
+		return { success = false, reason = "bad_request" }
+	end
+	nation.politics.taxRate = clamp(payload.rate, 0, ceiling)
+	ReplicationService:MarkDirty(player)
+	return { success = true, rate = nation.politics.taxRate }
+end
+
+function PoliticsService:_setGovernment(player: Player, payload: any): any
+	local nation = DataService:GetNation(player)
+	if not nation or typeof(payload) ~= "table" then
+		return { success = false, reason = "bad_request" }
+	end
+	local target = Governments[payload.government]
+	if not target then
+		return { success = false, reason = "unknown_government" }
+	end
+	if nation.politics.government == target.id then
+		return { success = false, reason = "no_change" }
+	end
+	if (nation.resources.influence or 0) &lt; GOVERNMENT_SWITCH_COST then
+		NotificationService:Send(player, "warning", "Need influence to change government")
+		return { success = false, reason = "insufficient_influence" }
+	end
+
+	nation.resources.influence -= GOVERNMENT_SWITCH_COST
+	nation.politics.government = target.id
+
+	-- Repeal any laws the new government forbids.
+	for lawId, active in nation.politics.activeLaws do
+		if active then
+			local law = Laws[lawId]
+			if law and table.find(law.forbiddenGovernments, target.id) then
+				nation.politics.activeLaws[lawId] = nil
+			end
+		end
+	end
+
+	-- Reset the election clock for the new regime.
+	if target.holdsElections then
+		nation.politics.nextElection = os.time() + Balance.POLITICS.electionTermSeconds
+	else
+		nation.politics.nextElection = 0
+	end
+
+	ReplicationService:MarkDirty(player)
+	NotificationService:Send(player, "success", "Government is now " .. target.displayName)
+	return { success = true }
+end
+
+function PoliticsService:_toggleLaw(player: Player, payload: any): any
+	local nation = DataService:GetNation(player)
+	if not nation or typeof(payload) ~= "table" then
+		return { success = false, reason = "bad_request" }
+	end
+	local law = Laws[payload.id]
+	if not law then
+		return { success = false, reason = "unknown_law" }
+	end
+	local isActive = nation.politics.activeLaws[payload.id] == true
+	if not isActive then
+		-- Enacting: check requirements.
+		if law.requiresTech and not nation.research.unlocked[law.requiresTech] then
+			return { success = false, reason = "tech_locked" }
+		end
+		if table.find(law.forbiddenGovernments, nation.politics.government) then
+			return { success = false, reason = "forbidden_government" }
+		end
+		nation.politics.activeLaws[payload.id] = true
+		NotificationService:Send(player, "success", law.displayName .. " enacted")
+	else
+		nation.politics.activeLaws[payload.id] = nil
+		NotificationService:Send(player, "info", law.displayName .. " repealed")
+	end
+	ReplicationService:MarkDirty(player)
+	return { success = true, active = nation.politics.activeLaws[payload.id] == true }
+end
+
+function PoliticsService:_rename(player: Player, payload: any): any
+	local nation = DataService:GetNation(player)
+	if not nation or typeof(payload) ~= "table" or typeof(payload.name) ~= "string" then
+		return { success = false, reason = "bad_request" }
+	end
+	-- Strip control characters and clamp length. (A shipped build should also
+	-- route this through TextService:FilterStringAsync before display.)
+	local cleaned = (payload.name:gsub("[%c]", "")):sub(1, 24)
+	cleaned = cleaned:match("^%s*(.-)%s*$") or cleaned
+	if #cleaned &lt; 1 then
+		return { success = false, reason = "empty_name" }
+	end
+	nation.name = cleaned
+	ReplicationService:MarkDirty(player)
+	return { success = true, name = cleaned }
+end
+
+-- ---- Slow political tick --------------------------------------------------
+
+function PoliticsService:Tick(player: Player, nation: Nation)
+	local resolved = Modifiers.resolve(nation)
+	local pol = nation.politics
+	local pop = nation.population
+
+	-- Corruption creeps upward; strong institutions and laws hold it back.
+	pol.corruption += Balance.POLITICS.corruptionCreep * resolved.corruptionCreepMult
+	pol.corruption += resolved.corruptionFlat * 0.05
+	pol.corruption = clamp(pol.corruption, 0, 100)
+
+	-- Approval follows public happiness, the budget balance and unrest.
+	local net = nation.economy.lastTickIncome - nation.economy.lastTickExpense
+	local approvalTarget = clamp(
+		pop.happiness * 0.6 + (net &gt;= 0 and 10 or -12) + 20 - pop.unrest * 0.3,
+		0,
+		100
+	)
+	pol.approval = clamp(drift(pol.approval, approvalTarget, Balance.POLITICS.approvalDrift), 0, 100)
+
+	-- Stability blends approval, unrest, corruption and government backbone.
+	local stabilityTarget = clamp(
+		50 + resolved.stabilityFlat + (pol.approval - 50) * 0.5 - pop.unrest * 0.5 - pol.corruption * 0.2,
+		0,
+		100
+	)
+	pol.stability = clamp(drift(pol.stability, stabilityTarget, 0.2), 0, 100)
+
+	if pol.stability &lt; Balance.POLITICS.crisisStabilityThreshold then
+		NotificationService:Send(player, "error", "Government unstable", "Address unrest before it boils over.")
+	end
+
+	-- Elections.
+	local gov = Governments[pol.government]
+	if gov and gov.holdsElections then
+		if pol.nextElection == 0 then
+			pol.nextElection = os.time() + Balance.POLITICS.electionTermSeconds
+		elseif os.time() &gt;= pol.nextElection then
+			if pol.approval &gt;= 50 then
+				NotificationService:Send(player, "success", "Election won", "The people return you to power.")
+				pol.stability = clamp(pol.stability + 5, 0, 100)
+			else
+				NotificationService:Send(player, "warning", "Election lost", "A rocky term ahead — approval reset.")
+				pol.approval = clamp(pol.approval + 15, 0, 100)
+				pol.stability = clamp(pol.stability - 10, 0, 100)
+			end
+			pol.nextElection = os.time() + Balance.POLITICS.electionTermSeconds
+		end
+	end
+
+	ReplicationService:MarkDirty(player)
+end
+
+function PoliticsService:Start()
+	local Constants = require(ReplicatedStorage.Nexus.Constants)
+
+	Net.handleRequest(NetRoutes.SET_TAX_RATE, function(player, payload)
+		return self:_setTax(player, payload)
+	end, { rate = 5, per = 1 })
+	Net.handleRequest(NetRoutes.SET_GOVERNMENT, function(player, payload)
+		return self:_setGovernment(player, payload)
+	end, { rate = 2, per = 1 })
+	Net.handleRequest(NetRoutes.TOGGLE_LAW, function(player, payload)
+		return self:_toggleLaw(player, payload)
+	end, { rate = 5, per = 1 })
+	Net.handleRequest(NetRoutes.RENAME_NATION, function(player, payload)
+		return self:_rename(player, payload)
+	end, { rate = 2, per = 1 })
+
+	task.spawn(function()
+		while true do
+			task.wait(Constants.POLITICS_TICK)
+			DataService:ForEachNation(function(player, nation)
+				local ok, err = pcall(function()
+					self:Tick(player, nation)
+				end)
+				if not ok then
+					log:Error(("politics tick failed for %s: %s"):format(player.Name, tostring(err)))
+				end
+			end)
+		end
+	end)
+
+	log:Info("politics handlers + tick ready")
+end
+
+return PoliticsService
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000025"><Properties><string name="Name">ReplicationService</string><ProtectedString name="Source">--!strict
+--[[
+	Services/ReplicationService.luau
+	The only place server state reaches a client. Services never call Net
+	directly for state; they mutate the authoritative nation and call
+	`MarkDirty(player)`. This service batches dirty players and pushes a filtered,
+	deep-copied snapshot at a fixed cadence, so a burst of building placements
+	replicates once, not ten times.
+
+	The client receives a read-only copy — it can never hold a live reference to
+	server tables, and it is free to render the snapshot however it likes.
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Logger = require(ReplicatedStorage.Nexus.Logger)
+local Net = require(ReplicatedStorage.Nexus.Net)
+local NetRoutes = require(ReplicatedStorage.Nexus.NetRoutes)
+local TableUtil = require(ReplicatedStorage.Nexus.TableUtil)
+local Types = require(ReplicatedStorage.Nexus.Types)
+
+type Nation = Types.Nation
+
+local log = Logger.new("ReplicationService")
+
+local ReplicationService = {
+	Name = "ReplicationService",
+}
+
+ReplicationService._dirty = {} :: { [Player]: boolean }
+-- Latest per-tick derived stats (flows the raw nation state does not store).
+ReplicationService._stats = {} :: { [Player]: any }
+
+local FLUSH_INTERVAL = 0.5
+
+--- Mark a player's state as changed; it will be pushed on the next flush.
+function ReplicationService:MarkDirty(player: Player)
+	self._dirty[player] = true
+end
+
+--- Attach derived, per-tick statistics to a player's next snapshot.
+function ReplicationService:SetStats(player: Player, stats: any)
+	self._stats[player] = stats
+end
+
+function ReplicationService:_push(player: Player, nation: Nation)
+	local snapshot = {
+		nation = TableUtil.deepCopy(nation),
+		stats = self._stats[player] or {},
+		serverTime = os.time(),
+	}
+	Net.fireClient(player, NetRoutes.STATE_SYNC, snapshot)
+end
+
+--- Force an immediate push (used right after a profile loads).
+function ReplicationService:PushNow(player: Player)
+	local DataService = require(script.Parent.DataService)
+	local nation = DataService:GetNation(player)
+	if nation then
+		self:_push(player, nation)
+	end
+	self._dirty[player] = nil
+end
+
+function ReplicationService:Start()
+	local DataService = require(script.Parent.DataService)
+
+	-- Send an immediate snapshot the moment a nation is ready.
+	DataService.Loaded:Connect(function(player: Player)
+		self:PushNow(player)
+	end)
+
+	Players.PlayerRemoving:Connect(function(player)
+		self._dirty[player] = nil
+		self._stats[player] = nil
+	end)
+
+	task.spawn(function()
+		while true do
+			task.wait(FLUSH_INTERVAL)
+			for player in self._dirty do
+				local nation = DataService:GetNation(player)
+				if nation then
+					self:_push(player, nation)
+				end
+				self._dirty[player] = nil
+			end
+		end
+	end)
+
+	log:Info("replication loop started")
+end
+
+return ReplicationService
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000026"><Properties><string name="Name">ResearchService</string><ProtectedString name="Source">--!strict
+--[[
+	Services/ResearchService.luau
+	Drives the technology tree. Research accumulates as the `research` resource
+	pool (from labs plus passive output of an educated populace) and is spent into
+	whichever technology the player has selected. Completing a tech flips a flag
+	the modifier resolver reads, so the effect is applied everywhere at once.
+
+	The prerequisite DAG is enforced here: a client can never start a tech whose
+	requirements are not already unlocked, no matter what it sends.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Logger = require(ReplicatedStorage.Nexus.Logger)
+local Net = require(ReplicatedStorage.Nexus.Net)
+local NetRoutes = require(ReplicatedStorage.Nexus.NetRoutes)
+local Types = require(ReplicatedStorage.Nexus.Types)
+local Balance = require(ReplicatedStorage.Nexus.Config.Balance)
+local Technologies = require(ReplicatedStorage.Nexus.Config.Technologies)
+
+local DataService = require(script.Parent.DataService)
+local NotificationService = require(script.Parent.NotificationService)
+local ReplicationService = require(script.Parent.ReplicationService)
+
+type Nation = Types.Nation
+
+local log = Logger.new("ResearchService")
+
+local ResearchService = {
+	Name = "ResearchService",
+}
+
+--- Are every prerequisite of `techId` already unlocked?
+local function prereqsMet(nation: Nation, def: Types.TechDef): boolean
+	for _, requirement in def.requires do
+		if not nation.research.unlocked[requirement] then
+			return false
+		end
+	end
+	return true
+end
+
+function ResearchService:Tick(player: Player, nation: Nation, _frame: any)
+	local r = nation.research
+
+	-- Passive research from an educated population.
+	local passive = nation.population.education * Balance.RESEARCH.passivePerEducation
+	nation.resources.research += passive * Balance.RESEARCH.pointConversion
+
+	if not r.current then
+		return
+	end
+	local def = Technologies[r.current]
+	if not def then
+		r.current = nil
+		return
+	end
+
+	-- Spend from the research pool into the active tech's progress.
+	local need = def.cost - r.progress
+	local spend = math.min(nation.resources.research, need)
+	if spend &gt; 0 then
+		r.progress += spend
+		nation.resources.research -= spend
+	end
+
+	if r.progress &gt;= def.cost then
+		r.unlocked[r.current] = true
+		local completed = def.displayName
+		r.current = nil
+		r.progress = 0
+		NotificationService:Send(player, "success", "Research complete", completed .. " unlocked.")
+		ReplicationService:MarkDirty(player)
+	end
+end
+
+function ResearchService:_start(player: Player, payload: any): any
+	local nation = DataService:GetNation(player)
+	if not nation or typeof(payload) ~= "table" then
+		return { success = false, reason = "bad_request" }
+	end
+	local id = payload.id
+	local def = Technologies[id]
+	if not def then
+		return { success = false, reason = "unknown_tech" }
+	end
+	if nation.research.unlocked[id] then
+		return { success = false, reason = "already_unlocked" }
+	end
+	if not prereqsMet(nation, def) then
+		return { success = false, reason = "prereqs_unmet" }
+	end
+
+	-- Switching target forfeits progress on the previous one.
+	if nation.research.current ~= id then
+		nation.research.current = id
+		nation.research.progress = 0
+	end
+	ReplicationService:MarkDirty(player)
+	NotificationService:Send(player, "info", "Researching " .. def.displayName)
+	return { success = true }
+end
+
+function ResearchService:Start()
+	Net.handleRequest(NetRoutes.START_RESEARCH, function(player, payload)
+		return self:_start(player, payload)
+	end, { rate = 5, per = 1 })
+	log:Info("research handlers ready")
+end
+
+return ResearchService
+</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000030"><Properties><string name="Name">Util</string></Properties><Item class="ModuleScript" referent="RBX00000028"><Properties><string name="Name">Modifiers</string><ProtectedString name="Source">--!strict
+--[[
+	Util/Modifiers.luau
+	Resolves a nation's active government, unlocked technologies, and enacted
+	laws into a single normalised modifier table. Every service reads from this
+	one resolver so the stacking rules live in exactly one place.
+
+	Convention:
+	  * `*Mult` fields are multipliers applied to a base value (1.0 = neutral).
+	  * `*Flat` fields are added directly to a base value.
+	  Government multipliers are the anchor; tech and law contributions stack on
+	  top as additive fractions, e.g. taxEfficiencyMult = govTaxEff + Σ fractions.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Governments = require(ReplicatedStorage.Nexus.Config.Governments)
+local Laws = require(ReplicatedStorage.Nexus.Config.Laws)
+local Technologies = require(ReplicatedStorage.Nexus.Config.Technologies)
+local Types = require(ReplicatedStorage.Nexus.Types)
+
+type Nation = Types.Nation
+
+export type Resolved = {
+	taxCeiling: number,
+	taxEfficiencyMult: number,
+	upkeepMult: number,
+	happinessFlat: number,
+	stabilityFlat: number,
+	corruptionFlat: number,
+	corruptionCreepMult: number,
+	researchBonusMult: number,
+	foodProductionMult: number,
+	powerSupplyMult: number,
+	materialCostMult: number,
+	industryJobsMult: number,
+	influenceBonusMult: number,
+	baseHealthFlat: number,
+}
+
+local Modifiers = {}
+
+function Modifiers.resolve(nation: Nation): Resolved
+	local gov = Governments[nation.politics.government] or Governments.democracy
+	local g = gov.modifiers
+
+	local r: Resolved = {
+		taxCeiling = g.taxCeiling,
+		taxEfficiencyMult = g.taxEfficiency,
+		upkeepMult = 1.0,
+		happinessFlat = g.happiness,
+		stabilityFlat = g.stability,
+		corruptionFlat = 0,
+		corruptionCreepMult = g.corruptionCreep,
+		researchBonusMult = g.researchBonus,
+		foodProductionMult = 1.0,
+		powerSupplyMult = 1.0,
+		materialCostMult = 1.0,
+		industryJobsMult = 1.0,
+		influenceBonusMult = g.influenceBonus,
+		baseHealthFlat = 0,
+	}
+
+	-- Accumulate additive fractions from technologies.
+	local techCreep = 0
+	local techResearch = 0
+	local techFood = 0
+	local techInfluence = 0
+	for techId in nation.research.unlocked do
+		local def = Technologies[techId]
+		if not def then
+			continue
+		end
+		local m = def.modifiers
+		r.taxEfficiencyMult += m.taxEfficiency or 0
+		r.materialCostMult += m.materialCost or 0
+		r.powerSupplyMult += m.powerSupply or 0
+		r.industryJobsMult += m.industryJobs or 0
+		r.baseHealthFlat += m.baseHealth or 0
+		techCreep += m.corruptionCreep or 0
+		techFood += m.foodProduction or 0
+		techInfluence += m.influenceBonus or 0
+	end
+
+	-- Accumulate law contributions.
+	local lawResearch = 0
+	local lawFood = 0
+	local lawUpkeep = 0
+	for lawId, active in nation.politics.activeLaws do
+		if not active then
+			continue
+		end
+		local def = Laws[lawId]
+		if not def then
+			continue
+		end
+		local m = def.modifiers
+		r.happinessFlat += m.happiness or 0
+		r.stabilityFlat += m.stability or 0
+		r.corruptionFlat += m.corruption or 0
+		r.taxEfficiencyMult += m.taxEfficiency or 0
+		lawResearch += m.researchBonus or 0
+		lawFood += m.foodProduction or 0
+		lawUpkeep += m.upkeep or 0
+	end
+
+	r.corruptionCreepMult *= (1 + techCreep)
+	r.researchBonusMult *= (1 + techResearch + lawResearch)
+	r.foodProductionMult += techFood + lawFood
+	r.influenceBonusMult *= (1 + techInfluence)
+	r.upkeepMult += lawUpkeep
+
+	return r
+end
+
+return Modifiers
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000029"><Properties><string name="Name">Validation</string><ProtectedString name="Source">--!strict
+--[[
+	Util/Validation.luau
+	Server-side guards for untrusted client payloads. Every request handler runs
+	its arguments through these before touching authoritative state. The rule:
+	assume the payload was crafted by an exploiter, and prove each field valid.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Constants = require(ReplicatedStorage.Nexus.Constants)
+
+local Validation = {}
+
+function Validation.isTable(v: any): boolean
+	return typeof(v) == "table"
+end
+
+function Validation.isString(v: any, maxLen: number?): boolean
+	return typeof(v) == "string" and #v &lt;= (maxLen or 256)
+end
+
+function Validation.isInteger(v: any): boolean
+	return typeof(v) == "number" and v == v and v % 1 == 0 and v ~= math.huge and v ~= -math.huge
+end
+
+--- A grid coordinate must be an integer inside [0, GRID_SIZE).
+function Validation.isGridCoord(v: any): boolean
+	return Validation.isInteger(v) and v &gt;= 0 and v &lt; Constants.GRID_SIZE
+end
+
+--- Rotation is restricted to the four cardinal orientations.
+function Validation.isRotation(v: any): boolean
+	return v == 0 or v == 90 or v == 180 or v == 270
+end
+
+--- Validate a `{ x, z }` position payload; returns cleaned ints or nil.
+function Validation.readPosition(payload: any): ({ x: number, z: number })?
+	if not Validation.isTable(payload) then
+		return nil
+	end
+	local x, z = payload.x, payload.z
+	if Validation.isGridCoord(x) and Validation.isGridCoord(z) then
+		return { x = x, z = z }
+	end
+	return nil
+end
+
+return Validation
+</ProtectedString></Properties></Item></Item></Item></Item><Item class="StarterPlayer" referent="RBX00000050"><Properties></Properties><Item class="StarterPlayerScripts" referent="RBX00000049"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX00000046"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
+--[[
+	init.client.luau
+	Client bootstrap. Registers every controller with the ClientFramework, then
+	runs the shared Init/Start lifecycle. Init order is chosen so the HUD's
+	chrome exists before the panels that attach buttons to it; Framework still
+	guarantees all Inits precede all Starts.
+
+	This is the ONLY LocalScript — every other client file is a ModuleScript, and
+	they are children of this script (Rojo turns the folder-with-init into this
+	LocalScript), so we address them from `script`.
+]]
+
+local Players = game:GetService("Players")
+
+local ClientFramework = require(script.ClientFramework)
+local Controllers = script.Controllers
+
+local ORDER = {
+	"StateController",
+	"NotificationController",
+	"HudController",
+	"WorldController",
+	"BuildController",
+	"PoliticsController",
+	"ResearchController",
+}
+
+for _, name in ORDER do
+	local module = Controllers:FindFirstChild(name)
+	assert(module, "missing controller module: " .. name)
+	ClientFramework.register(require(module))
+end
+
+ClientFramework.start()
+
+print("[Nexus] client online for " .. Players.LocalPlayer.Name)
+</ProtectedString></Properties><Item class="ModuleScript" referent="RBX00000032"><Properties><string name="Name">ClientFramework</string><ProtectedString name="Source">--!strict
+--[[
+	ClientFramework.luau
+	The client mirror of the server Framework: a controller registry with the
+	same two-phase Init/Start lifecycle, so UI controllers can reference each
+	other lazily without load-order headaches.
+]]
+
+local Logger = require(game:GetService("ReplicatedStorage").Nexus.Logger)
+
+local log = Logger.new("ClientFramework")
+
+export type Controller = {
+	Name: string,
+	Init: ((self: any) -&gt; ())?,
+	Start: ((self: any) -&gt; ())?,
+	[any]: any,
+}
+
+local ClientFramework = {}
+local controllers: { [string]: Controller } = {}
+local started = false
+
+function ClientFramework.register(controller: Controller): Controller
+	assert(not started, "cannot register after start")
+	assert(controller.Name, "controller missing Name")
+	assert(not controllers[controller.Name], "duplicate controller: " .. controller.Name)
+	controllers[controller.Name] = controller
+	return controller
+end
+
+function ClientFramework.get(name: string): any
+	local controller = controllers[name]
+	if not controller then
+		error(("controller %q not registered"):format(name), 2)
+	end
+	return controller
+end
+
+function ClientFramework.start()
+	assert(not started, "already started")
+	started = true
+
+	for name, controller in controllers do
+		if controller.Init then
+			local ok, err = pcall(controller.Init, controller)
+			if not ok then
+				log:Error(("Init failed for %s: %s"):format(name, tostring(err)))
+			end
+		end
+	end
+	for name, controller in controllers do
+		if controller.Start then
+			task.spawn(function()
+				local ok, err = pcall(controller.Start, controller)
+				if not ok then
+					log:Error(("Start failed for %s: %s"):format(name, tostring(err)))
+				end
+			end)
+		end
+	end
+	log:Info("controllers started")
+end
+
+return ClientFramework
+</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000040"><Properties><string name="Name">Controllers</string></Properties><Item class="ModuleScript" referent="RBX00000033"><Properties><string name="Name">BuildController</string><ProtectedString name="Source">--!strict
+--[[
+	Controllers/BuildController.luau
+	Everything the player touches to shape their city:
+	  * a categorised build menu (locked entries reveal as tech unlocks),
+	  * grid placement with a live ghost that turns red when a spot is invalid,
+	    rotates with R and cancels with Escape,
+	  * click-to-select an existing building for upgrade / repair / demolish.
+
+	Client-side validity (bounds, overlap, affordability) only drives the ghost
+	colour and button states — every action is re-validated by the server.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+
+local Constants = require(ReplicatedStorage.Nexus.Constants)
+local Net = require(ReplicatedStorage.Nexus.Net)
+local NetRoutes = require(ReplicatedStorage.Nexus.NetRoutes)
+local ResourceMath = require(ReplicatedStorage.Nexus.ResourceMath)
+local WorldGrid = require(ReplicatedStorage.Nexus.WorldGrid)
+local Buildings = require(ReplicatedStorage.Nexus.Config.Buildings)
+
+local Create = require(script.Parent.Parent.UI.Create)
+local Format = require(script.Parent.Parent.UI.Format)
+local Theme = require(script.Parent.Parent.UI.Theme)
+
+local BuildController = {
+	Name = "BuildController",
+}
+
+BuildController._panel = nil :: Frame?
+BuildController._selectionPanel = nil :: Frame?
+BuildController._selectedId = nil :: string?
+BuildController._placingKind = nil :: string?
+BuildController._placingRotation = 0
+BuildController._ghost = nil :: BasePart?
+BuildController._buttons = {} :: { { button: TextButton, kind: string } }
+
+-- ---- Helpers --------------------------------------------------------------
+
+local function orientedFootprint(kind: string, rotation: number): (number, number)
+	local def = Buildings[kind]
+	local w, h = def.footprint.w, def.footprint.h
+	if rotation == 90 or rotation == 270 then
+		return h, w
+	end
+	return w, h
+end
+
+local function occupancy(nation: any, excludeId: string?): { [string]: boolean }
+	local occ = {}
+	for id, b in nation.buildings do
+		if id == excludeId then
+			continue
+		end
+		local def = Buildings[b.kind]
+		if not def then
+			continue
+		end
+		local w, h = orientedFootprint(b.kind, b.rotation)
+		for dx = 0, w - 1 do
+			for dz = 0, h - 1 do
+				occ[(b.position.x + dx) .. "," .. (b.position.z + dz)] = true
+			end
+		end
+	end
+	return occ
+end
+
+local function costSummary(kind: string, level: number): string
+	local cost = Buildings[kind].cost[level] or {}
+	local parts = {}
+	if cost.money then
+		table.insert(parts, "$" .. Format.abbrev(cost.money))
+	end
+	if cost.materials then
+		table.insert(parts, "▣" .. Format.abbrev(cost.materials))
+	end
+	return table.concat(parts, "  ")
+end
+
+local function fireAction(route: string, payload: any)
+	task.spawn(function()
+		Net.request(route, payload)
+	end)
+end
+
+-- ---- Build menu -----------------------------------------------------------
+
+function BuildController:_buildMenu()
+	local StateController = require(script.Parent.StateController)
+	local HudController = require(script.Parent.HudController)
+	local gui = HudController:GetGui()
+
+	local panel = Create("Frame", {
+		Name = "BuildMenu",
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -16, 0.5, 0),
+		Size = UDim2.fromOffset(260, 420),
+		BackgroundColor3 = Theme.color.panel,
+		BackgroundTransparency = 0.05,
+		Visible = false,
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = Theme.corner }),
+			Create("UIStroke", { Color = Theme.color.stroke, Thickness = 1 }),
+			Create("TextLabel", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(14, 10),
+				Size = UDim2.new(1, -28, 0, 22),
+				Font = Theme.font.bold,
+				Text = "Construction",
+				TextColor3 = Theme.color.text,
+				TextSize = 17,
+				TextXAlignment = Enum.TextXAlignment.Left,
+			}),
+			Create("ScrollingFrame", {
+				Name = "List",
+				Position = UDim2.fromOffset(8, 40),
+				Size = UDim2.new(1, -16, 1, -48),
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				ScrollBarThickness = 4,
+				CanvasSize = UDim2.new(),
+				AutomaticCanvasSize = Enum.AutomaticSize.Y,
+				[Create.Children] = {
+					Create("UIListLayout", {
+						Padding = UDim.new(0, 6),
+						SortOrder = Enum.SortOrder.LayoutOrder,
+					}),
+				},
+			}),
+		},
+	}) :: Frame
+
+	local list = panel:FindFirstChild("List") :: ScrollingFrame
+
+	-- Stable order: by category then display name.
+	local order = {}
+	for kind in Buildings do
+		table.insert(order, kind)
+	end
+	table.sort(order, function(a, b)
+		local da, db = Buildings[a], Buildings[b]
+		if da.category ~= db.category then
+			return da.category &lt; db.category
+		end
+		return da.displayName &lt; db.displayName
+	end)
+
+	for i, kind in order do
+		local def = Buildings[kind]
+		local button = Create("TextButton", {
+			LayoutOrder = i,
+			BackgroundColor3 = Theme.color.panelLight,
+			Size = UDim2.new(1, 0, 0, 52),
+			AutoButtonColor = true,
+			Text = "",
+			[Create.Children] = {
+				Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+				Create("TextLabel", {
+					BackgroundTransparency = 1,
+					Position = UDim2.fromOffset(10, 6),
+					Size = UDim2.new(1, -16, 0, 18),
+					Font = Theme.font.bold,
+					Text = def.displayName,
+					TextColor3 = Theme.color.text,
+					TextSize = 14,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}),
+				Create("TextLabel", {
+					Name = "Sub",
+					BackgroundTransparency = 1,
+					Position = UDim2.fromOffset(10, 26),
+					Size = UDim2.new(1, -16, 0, 18),
+					Font = Theme.font.regular,
+					Text = def.category .. "   " .. costSummary(kind, 1),
+					TextColor3 = Theme.color.textDim,
+					TextSize = 12,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}),
+			},
+			[Create.Event] = {
+				Activated = function()
+					self:_onPickBuilding(kind)
+				end,
+			},
+		}) :: TextButton
+		button.Parent = list
+		table.insert(self._buttons, { button = button, kind = kind })
+	end
+
+	panel.Parent = gui
+	self._panel = panel
+
+	-- Refresh lock state as tech changes.
+	StateController.Changed:Connect(function()
+		self:_refreshLocks()
+	end)
+	self:_refreshLocks()
+end
+
+function BuildController:_refreshLocks()
+	local StateController = require(script.Parent.StateController)
+	local nation = StateController:GetNation()
+	if not nation then
+		return
+	end
+	for _, entry in self._buttons do
+		local def = Buildings[entry.kind]
+		local locked = def.requiresTech ~= nil and not nation.research.unlocked[def.requiresTech]
+		local sub = entry.button:FindFirstChild("Sub") :: TextLabel?
+		if locked then
+			entry.button.BackgroundColor3 = Theme.color.bg
+			if sub then
+				sub.Text = "🔒 Requires research"
+				sub.TextColor3 = Theme.color.bad
+			end
+		else
+			entry.button.BackgroundColor3 = Theme.color.panelLight
+			if sub then
+				sub.Text = def.category .. "   " .. costSummary(entry.kind, 1)
+				sub.TextColor3 = Theme.color.textDim
+			end
+		end
+	end
+end
+
+function BuildController:_onPickBuilding(kind: string)
+	local StateController = require(script.Parent.StateController)
+	local nation = StateController:GetNation()
+	local def = Buildings[kind]
+	if nation and def.requiresTech and not nation.research.unlocked[def.requiresTech] then
+		local Notif = require(script.Parent.NotificationController)
+		Notif:Show("warning", "Locked", "Research required to build " .. def.displayName)
+		return
+	end
+	self:_beginPlacement(kind)
+end
+
+-- ---- Placement ------------------------------------------------------------
+
+function BuildController:_beginPlacement(kind: string)
+	self:_clearSelection()
+	self._placingKind = kind
+	self._placingRotation = 0
+	if not self._ghost then
+		local ghost = Instance.new("Part")
+		ghost.Anchored = true
+		ghost.CanCollide = false
+		ghost.CanQuery = false
+		ghost.Transparency = 0.4
+		ghost.Material = Enum.Material.ForceField
+		ghost.Parent = Workspace
+		self._ghost = ghost
+	end
+	if self._panel then
+		self._panel.Visible = false
+	end
+end
+
+function BuildController:_cancelPlacement()
+	self._placingKind = nil
+	if self._ghost then
+		self._ghost:Destroy()
+		self._ghost = nil
+	end
+end
+
+-- Raycast the mouse against the baseplate; returns the corner tile for the
+-- current footprint (centred on the cursor), or nil if the cursor is off-map.
+function BuildController:_cursorTile(): ({ x: number, z: number })?
+	local WorldController = require(script.Parent.WorldController)
+	local camera = Workspace.CurrentCamera
+	local mouse = UserInputService:GetMouseLocation()
+	local ray = camera:ViewportPointToRay(mouse.X, mouse.Y)
+
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Include
+	params.FilterDescendantsInstances = { WorldController:GetBaseplate() }
+	local result = Workspace:Raycast(ray.Origin, ray.Direction * 2000, params)
+	if not result then
+		return nil
+	end
+
+	local w, h = orientedFootprint(self._placingKind :: string, self._placingRotation)
+	local tx, tz = WorldGrid.worldToTile(result.Position)
+	local cornerX = math.clamp(tx - math.floor(w / 2), 0, Constants.GRID_SIZE - w)
+	local cornerZ = math.clamp(tz - math.floor(h / 2), 0, Constants.GRID_SIZE - h)
+	return { x = cornerX, z = cornerZ }
+end
+
+function BuildController:_isValid(corner: { x: number, z: number }): boolean
+	local StateController = require(script.Parent.StateController)
+	local nation = StateController:GetNation()
+	if not nation then
+		return false
+	end
+	local kind = self._placingKind :: string
+	local w, h = orientedFootprint(kind, self._placingRotation)
+	if corner.x + w &gt; Constants.GRID_SIZE or corner.z + h &gt; Constants.GRID_SIZE then
+		return false
+	end
+	local occ = occupancy(nation)
+	for dx = 0, w - 1 do
+		for dz = 0, h - 1 do
+			if occ[(corner.x + dx) .. "," .. (corner.z + dz)] then
+				return false
+			end
+		end
+	end
+	local cost = Buildings[kind].cost[1] or {}
+	return ResourceMath.canAfford(nation.resources, cost)
+end
+
+function BuildController:_updateGhost()
+	if not self._placingKind or not self._ghost then
+		return
+	end
+	local corner = self:_cursorTile()
+	local ghost = self._ghost
+	if not corner then
+		ghost.Transparency = 1
+		return
+	end
+	local kind = self._placingKind
+	local w, h = orientedFootprint(kind, self._placingRotation)
+	local height = 6
+	local center = WorldGrid.footprintCenter(corner.x, corner.z, w, h)
+	ghost.Size = Vector3.new(w * WorldGrid.STUDS * 0.9, height, h * WorldGrid.STUDS * 0.9)
+	ghost.Position = center + Vector3.new(0, height / 2, 0)
+	local valid = self:_isValid(corner)
+	ghost.Transparency = 0.4
+	ghost.Color = valid and Theme.color.good or Theme.color.bad
+end
+
+function BuildController:_confirmPlacement()
+	local corner = self:_cursorTile()
+	if not corner or not self._placingKind then
+		return
+	end
+	if not self:_isValid(corner) then
+		local Notif = require(script.Parent.NotificationController)
+		Notif:Show("warning", "Can't build here")
+		return
+	end
+	fireAction(NetRoutes.PLACE_BUILDING, {
+		kind = self._placingKind,
+		x = corner.x,
+		z = corner.z,
+		rotation = self._placingRotation,
+	})
+	-- Stay in placement mode for rapid building; Escape exits.
+end
+
+-- ---- Selection + context actions ------------------------------------------
+
+function BuildController:_pickBuildingUnderCursor(): string?
+	local WorldController = require(script.Parent.WorldController)
+	local camera = Workspace.CurrentCamera
+	local mouse = UserInputService:GetMouseLocation()
+	local ray = camera:ViewportPointToRay(mouse.X, mouse.Y)
+
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Include
+	params.FilterDescendantsInstances = { WorldController:GetCityFolder() }
+	local result = Workspace:Raycast(ray.Origin, ray.Direction * 2000, params)
+	if result and result.Instance then
+		return result.Instance:GetAttribute("buildingId") :: string?
+	end
+	return nil
+end
+
+function BuildController:_clearSelection()
+	self._selectedId = nil
+	if self._selectionPanel then
+		self._selectionPanel.Visible = false
+	end
+end
+
+function BuildController:_select(id: string)
+	self._selectedId = id
+	self:_refreshSelectionPanel()
+	if self._selectionPanel then
+		self._selectionPanel.Visible = true
+	end
+end
+
+function BuildController:_refreshSelectionPanel()
+	local panel = self._selectionPanel
+	local id = self._selectedId
+	if not panel or not id then
+		return
+	end
+	local StateController = require(script.Parent.StateController)
+	local nation = StateController:GetNation()
+	local building = nation and nation.buildings[id]
+	if not building then
+		self:_clearSelection()
+		return
+	end
+	local def = Buildings[building.kind]
+	local title = panel:FindFirstChild("Title") :: TextLabel
+	local info = panel:FindFirstChild("Info") :: TextLabel
+	title.Text = def.displayName .. "  (Lv " .. building.level .. ")"
+	info.Text = ("Condition %d%%   %s"):format(
+		math.floor(building.condition * 100 + 0.5),
+		building.active and "Active" or "Offline"
+	)
+end
+
+function BuildController:_buildSelectionPanel()
+	local HudController = require(script.Parent.HudController)
+	local gui = HudController:GetGui()
+
+	local function actionButton(text: string, color: Color3, onClick: () -&gt; ()): TextButton
+		return Create("TextButton", {
+			BackgroundColor3 = color,
+			Size = UDim2.new(0, 96, 1, 0),
+			Font = Theme.font.bold,
+			Text = text,
+			TextColor3 = Theme.color.text,
+			TextSize = 14,
+			AutoButtonColor = true,
+			[Create.Children] = { Create("UICorner", { CornerRadius = UDim.new(0, 8) }) },
+			[Create.Event] = { Activated = onClick },
+		}) :: TextButton
+	end
+
+	local panel = Create("Frame", {
+		Name = "Selection",
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -70),
+		Size = UDim2.fromOffset(340, 96),
+		BackgroundColor3 = Theme.color.panel,
+		BackgroundTransparency = 0.05,
+		Visible = false,
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = Theme.corner }),
+			Create("UIStroke", { Color = Theme.color.stroke, Thickness = 1 }),
+			Create("TextLabel", {
+				Name = "Title",
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(14, 8),
+				Size = UDim2.new(1, -28, 0, 20),
+				Font = Theme.font.bold,
+				Text = "",
+				TextColor3 = Theme.color.text,
+				TextSize = 15,
+				TextXAlignment = Enum.TextXAlignment.Left,
+			}),
+			Create("TextLabel", {
+				Name = "Info",
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(14, 30),
+				Size = UDim2.new(1, -28, 0, 18),
+				Font = Theme.font.regular,
+				Text = "",
+				TextColor3 = Theme.color.textDim,
+				TextSize = 12,
+				TextXAlignment = Enum.TextXAlignment.Left,
+			}),
+			Create("Frame", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(14, 54),
+				Size = UDim2.new(1, -28, 0, 34),
+				[Create.Children] = {
+					Create("UIListLayout", {
+						FillDirection = Enum.FillDirection.Horizontal,
+						Padding = UDim.new(0, 8),
+						SortOrder = Enum.SortOrder.LayoutOrder,
+					}),
+					actionButton("Upgrade", Theme.color.accentDim, function()
+						if self._selectedId then
+							fireAction(NetRoutes.UPGRADE_BUILDING, { id = self._selectedId })
+						end
+					end),
+					actionButton("Repair", Theme.color.panelLight, function()
+						if self._selectedId then
+							fireAction(NetRoutes.REPAIR_BUILDING, { id = self._selectedId })
+						end
+					end),
+					actionButton("Demolish", Color3.fromRGB(120, 50, 50), function()
+						if self._selectedId then
+							fireAction(NetRoutes.DEMOLISH_BUILDING, { id = self._selectedId })
+							self:_clearSelection()
+						end
+					end),
+				},
+			}),
+		},
+	}) :: Frame
+	panel.Parent = gui
+	self._selectionPanel = panel
+end
+
+-- ---- Input ----------------------------------------------------------------
+
+function BuildController:_bindInput()
+	UserInputService.InputBegan:Connect(function(input, gameProcessed)
+		if input.KeyCode == Enum.KeyCode.R and self._placingKind then
+			self._placingRotation = (self._placingRotation + 90) % 360
+			return
+		end
+		if input.KeyCode == Enum.KeyCode.Escape then
+			self:_cancelPlacement()
+			self:_clearSelection()
+			return
+		end
+		if gameProcessed then
+			return
+		end
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			if self._placingKind then
+				self:_confirmPlacement()
+			else
+				local id = self:_pickBuildingUnderCursor()
+				if id then
+					self:_select(id)
+				else
+					self:_clearSelection()
+				end
+			end
+		end
+	end)
+
+	RunService.RenderStepped:Connect(function()
+		if self._placingKind then
+			self:_updateGhost()
+		end
+	end)
+end
+
+-- ---- Lifecycle ------------------------------------------------------------
+
+function BuildController:Start()
+	local HudController = require(script.Parent.HudController)
+	local StateController = require(script.Parent.StateController)
+
+	self:_buildMenu()
+	self:_buildSelectionPanel()
+	self:_bindInput()
+
+	HudController:AddButton("🏗 Build", function()
+		if self._placingKind then
+			self:_cancelPlacement()
+			return
+		end
+		if self._panel then
+			self._panel.Visible = not self._panel.Visible
+		end
+	end)
+
+	StateController.Changed:Connect(function()
+		self:_refreshSelectionPanel()
+	end)
+end
+
+return BuildController
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000034"><Properties><string name="Name">HudController</string><ProtectedString name="Source">--!strict
+--[[
+	Controllers/HudController.luau
+	The persistent HUD: a top resource bar, a compact national-stats panel, and a
+	bottom action bar that other controllers hang their panel-toggle buttons on.
+
+	HudController owns the root ScreenGui and exposes it (GetGui) plus AddButton so
+	the Build/Politics/Research controllers can attach to a consistent chrome
+	without HudController needing to know they exist.
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Constants = require(ReplicatedStorage.Nexus.Constants)
+local Resources = require(ReplicatedStorage.Nexus.Config.Resources)
+
+local Create = require(script.Parent.Parent.UI.Create)
+local Format = require(script.Parent.Parent.UI.Format)
+local Theme = require(script.Parent.Parent.UI.Theme)
+
+local HudController = {
+	Name = "HudController",
+}
+
+HudController._gui = nil :: ScreenGui?
+HudController._chips = {} :: { [string]: TextLabel }
+HudController._stats = {} :: { [string]: TextLabel }
+HudController._nameLabel = nil :: TextLabel?
+HudController._buttonBar = nil :: Frame?
+
+-- ---- Builders -------------------------------------------------------------
+
+local function resourceChip(resourceId: string): (Frame, TextLabel)
+	local meta = Resources[resourceId]
+	local color = Color3.new(meta.color[1], meta.color[2], meta.color[3])
+
+	local valueLabel = Create("TextLabel", {
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -30, 1, 0),
+		Position = UDim2.fromOffset(28, 0),
+		Font = Theme.font.bold,
+		Text = "0",
+		TextColor3 = Theme.color.text,
+		TextSize = 15,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}) :: TextLabel
+
+	local chip = Create("Frame", {
+		BackgroundColor3 = Theme.color.panelLight,
+		Size = UDim2.fromOffset(108, 34),
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+			Create("TextLabel", {
+				BackgroundTransparency = 1,
+				Size = UDim2.fromOffset(24, 34),
+				Position = UDim2.fromOffset(6, 0),
+				Font = Theme.font.bold,
+				Text = meta.symbol,
+				TextColor3 = color,
+				TextSize = 16,
+			}),
+			valueLabel,
+		},
+	}) :: Frame
+
+	return chip, valueLabel
+end
+
+local function statRow(label: string): (Frame, TextLabel)
+	local valueLabel = Create("TextLabel", {
+		BackgroundTransparency = 1,
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, 0, 0, 0),
+		Size = UDim2.new(0.5, 0, 1, 0),
+		Font = Theme.font.bold,
+		Text = "-",
+		TextColor3 = Theme.color.text,
+		TextSize = 13,
+		TextXAlignment = Enum.TextXAlignment.Right,
+	}) :: TextLabel
+
+	local row = Create("Frame", {
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 20),
+		[Create.Children] = {
+			Create("TextLabel", {
+				BackgroundTransparency = 1,
+				Size = UDim2.new(0.5, 0, 1, 0),
+				Font = Theme.font.regular,
+				Text = label,
+				TextColor3 = Theme.color.textDim,
+				TextSize = 13,
+				TextXAlignment = Enum.TextXAlignment.Left,
+			}),
+			valueLabel,
+		},
+	}) :: Frame
+
+	return row, valueLabel
+end
+
+-- ---- Public API -----------------------------------------------------------
+
+function HudController:GetGui(): ScreenGui
+	return assert(self._gui, "HUD gui not built yet")
+end
+
+--- Add a toggle button to the bottom action bar. Returns the button.
+function HudController:AddButton(text: string, onClick: () -&gt; ()): TextButton
+	local bar = assert(self._buttonBar, "button bar not built")
+	local button = Create("TextButton", {
+		AutoButtonColor = true,
+		BackgroundColor3 = Theme.color.panelLight,
+		Size = UDim2.fromOffset(120, 44),
+		Font = Theme.font.bold,
+		Text = text,
+		TextColor3 = Theme.color.text,
+		TextSize = 15,
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = Theme.corner }),
+			Create("UIStroke", { Color = Theme.color.stroke, Thickness = 1 }),
+		},
+		[Create.Event] = { Activated = onClick },
+	}) :: TextButton
+	button.Parent = bar
+	return button
+end
+
+-- ---- Lifecycle ------------------------------------------------------------
+
+function HudController:Init()
+	local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
+
+	local gui = Create("ScreenGui", {
+		Name = "NexusHUD",
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		IgnoreGuiInset = true,
+		DisplayOrder = 10,
+	}) :: ScreenGui
+
+	-- Top resource bar.
+	local chipRow = Create("Frame", {
+		BackgroundColor3 = Theme.color.bg,
+		BackgroundTransparency = 0.15,
+		Size = UDim2.new(1, 0, 0, 50),
+		[Create.Children] = {
+			Create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Horizontal,
+				Padding = UDim.new(0, 8),
+				VerticalAlignment = Enum.VerticalAlignment.Center,
+				HorizontalAlignment = Enum.HorizontalAlignment.Center,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+			}),
+			Create("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }),
+		},
+	})
+	chipRow.Parent = gui
+
+	for _, resourceId in Constants.RESOURCE_ORDER do
+		local chip, label = resourceChip(resourceId)
+		chip.Parent = chipRow
+		self._chips[resourceId] = label
+	end
+
+	-- Left stats panel.
+	local statsPanel = Create("Frame", {
+		BackgroundColor3 = Theme.color.panel,
+		BackgroundTransparency = 0.1,
+		Position = UDim2.fromOffset(16, 66),
+		Size = UDim2.fromOffset(220, 210),
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = Theme.corner }),
+			Create("UIStroke", { Color = Theme.color.stroke, Thickness = 1 }),
+			Create("UIPadding", {
+				PaddingTop = UDim.new(0, 10),
+				PaddingBottom = UDim.new(0, 10),
+				PaddingLeft = UDim.new(0, 12),
+				PaddingRight = UDim.new(0, 12),
+			}),
+			Create("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }),
+		},
+	})
+
+	self._nameLabel = Create("TextLabel", {
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 24),
+		Font = Theme.font.bold,
+		Text = "My Nation",
+		TextColor3 = Theme.color.accent,
+		TextSize = 17,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}) :: TextLabel
+	self._nameLabel.Parent = statsPanel
+
+	local statOrder = {
+		{ key = "population", label = "Population" },
+		{ key = "happiness", label = "Happiness" },
+		{ key = "approval", label = "Approval" },
+		{ key = "stability", label = "Stability" },
+		{ key = "gdp", label = "GDP / tick" },
+		{ key = "net", label = "Budget / tick" },
+		{ key = "debt", label = "Debt" },
+		{ key = "power", label = "Power" },
+	}
+	for _, entry in statOrder do
+		local row, value = statRow(entry.label)
+		row.Parent = statsPanel
+		self._stats[entry.key] = value
+	end
+	statsPanel.Parent = gui
+
+	-- Bottom action bar.
+	self._buttonBar = Create("Frame", {
+		Name = "ActionBar",
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -16),
+		Size = UDim2.fromOffset(400, 44),
+		BackgroundTransparency = 1,
+		[Create.Children] = {
+			Create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Horizontal,
+				Padding = UDim.new(0, 10),
+				HorizontalAlignment = Enum.HorizontalAlignment.Center,
+				VerticalAlignment = Enum.VerticalAlignment.Center,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+			}),
+		},
+	}) :: Frame
+	self._buttonBar.Parent = gui
+
+	gui.Parent = playerGui
+	self._gui = gui
+end
+
+function HudController:_refresh(snapshot: any)
+	local nation = snapshot.nation
+	local stats = snapshot.stats or {}
+	local res = nation.resources
+
+	for resourceId, label in self._chips do
+		local value = res[resourceId] or 0
+		if resourceId == "energy" then
+			label.Text = Format.signed(value)
+			label.TextColor3 = value &gt;= 0 and Theme.color.good or Theme.color.bad
+		else
+			label.Text = Format.abbrev(value)
+		end
+	end
+
+	if self._nameLabel then
+		self._nameLabel.Text = nation.name
+	end
+
+	local set = function(key: string, text: string, color: Color3?)
+		local label = self._stats[key]
+		if label then
+			label.Text = text
+			if color then
+				label.TextColor3 = color
+			end
+		end
+	end
+
+	set("population", Format.abbrev(nation.population.total))
+	set(
+		"happiness",
+		Format.round(nation.population.happiness) .. "%",
+		nation.population.happiness &gt;= 50 and Theme.color.good or Theme.color.warn
+	)
+	set("approval", Format.round(nation.politics.approval) .. "%")
+	set("stability", Format.round(nation.politics.stability) .. "%",
+		nation.politics.stability &gt;= 40 and Theme.color.text or Theme.color.bad)
+	set("gdp", Format.abbrev(stats.gdp or nation.economy.gdp))
+	set(
+		"net",
+		Format.signed(stats.net or 0),
+		(stats.net or 0) &gt;= 0 and Theme.color.good or Theme.color.bad
+	)
+	set("debt", Format.abbrev(nation.economy.debt), nation.economy.debt &gt; 0 and Theme.color.warn or Theme.color.text)
+	set(
+		"power",
+		Format.signed(stats.powerNet or res.energy or 0),
+		(stats.powerNet or 0) &gt;= 0 and Theme.color.good or Theme.color.bad
+	)
+end
+
+function HudController:Start()
+	local StateController = require(script.Parent.StateController)
+	StateController.Changed:Connect(function(snapshot)
+		self:_refresh(snapshot)
+	end)
+	if StateController:IsReady() then
+		self:_refresh(StateController:GetSnapshot())
+	end
+end
+
+return HudController
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000035"><Properties><string name="Name">NotificationController</string><ProtectedString name="Source">--!strict
+--[[
+	Controllers/NotificationController.luau
+	Renders transient server notifications as stacked toasts in the top-right.
+	Each toast is colour-coded by severity, slides in, and dismisses itself.
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+
+local Net = require(ReplicatedStorage.Nexus.Net)
+local NetRoutes = require(ReplicatedStorage.Nexus.NetRoutes)
+
+local Create = require(script.Parent.Parent.UI.Create)
+local Theme = require(script.Parent.Parent.UI.Theme)
+
+local NotificationController = {
+	Name = "NotificationController",
+}
+
+NotificationController._container = nil :: Frame?
+
+local function buildToast(severity: string, title: string, body: string?): Frame
+	local color = Theme.severityColor[severity] or Theme.color.accent
+
+	local toast = Create("Frame", {
+		BackgroundColor3 = Theme.color.panel,
+		BackgroundTransparency = 0.05,
+		Size = UDim2.new(1, 0, 0, body and 58 or 40),
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = Theme.corner }),
+			Create("UIStroke", { Color = Theme.color.stroke, Thickness = 1, Transparency = 0.3 }),
+			Create("Frame", {
+				BackgroundColor3 = color,
+				Size = UDim2.new(0, 4, 1, -12),
+				Position = UDim2.fromOffset(8, 6),
+				[Create.Children] = { Create("UICorner", { CornerRadius = UDim.new(0, 2) }) },
+			}),
+			Create("TextLabel", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(20, 6),
+				Size = UDim2.new(1, -28, 0, 18),
+				Font = Theme.font.bold,
+				Text = title,
+				TextColor3 = Theme.color.text,
+				TextSize = 14,
+				TextXAlignment = Enum.TextXAlignment.Left,
+			}),
+			body and Create("TextLabel", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(20, 26),
+				Size = UDim2.new(1, -28, 0, 26),
+				Font = Theme.font.regular,
+				Text = body,
+				TextColor3 = Theme.color.textDim,
+				TextSize = 12,
+				TextWrapped = true,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				TextYAlignment = Enum.TextYAlignment.Top,
+			}) or nil,
+		},
+	}) :: Frame
+
+	return toast
+end
+
+function NotificationController:Show(severity: string, title: string, body: string?)
+	local container = self._container
+	if not container then
+		return
+	end
+	local toast = buildToast(severity, title, body)
+	toast.Position = UDim2.new(1, 20, 0, 0)
+	toast.Parent = container
+
+	TweenService:Create(toast, TweenInfo.new(0.25, Enum.EasingStyle.Quad), {
+		Position = UDim2.fromOffset(0, 0),
+	}):Play()
+
+	task.delay(4, function()
+		if not toast.Parent then
+			return
+		end
+		local tween = TweenService:Create(toast, TweenInfo.new(0.3), {
+			Position = UDim2.new(1, 20, 0, 0),
+			BackgroundTransparency = 1,
+		})
+		tween:Play()
+		tween.Completed:Wait()
+		toast:Destroy()
+	end)
+end
+
+function NotificationController:Init()
+	local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
+
+	local gui = Create("ScreenGui", {
+		Name = "NexusNotifications",
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		IgnoreGuiInset = true,
+		DisplayOrder = 50,
+	})
+
+	self._container = Create("Frame", {
+		Name = "Container",
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -16, 0, 70),
+		Size = UDim2.new(0, 300, 1, -90),
+		BackgroundTransparency = 1,
+		[Create.Children] = {
+			Create("UIListLayout", {
+				Padding = UDim.new(0, 8),
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				HorizontalAlignment = Enum.HorizontalAlignment.Right,
+				VerticalAlignment = Enum.VerticalAlignment.Top,
+			}),
+		},
+	}) :: Frame
+	self._container.Parent = gui
+	gui.Parent = playerGui
+end
+
+function NotificationController:Start()
+	Net.onEvent(NetRoutes.NOTIFY, function(payload)
+		if typeof(payload) ~= "table" then
+			return
+		end
+		self:Show(payload.severity or "info", tostring(payload.title or ""), payload.body)
+	end)
+end
+
+return NotificationController
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000036"><Properties><string name="Name">PoliticsController</string><ProtectedString name="Source">--!strict
+--[[
+	Controllers/PoliticsController.luau
+	The governance panel: adjust the tax rate, switch government type, and
+	enact/repeal laws. Reads the live snapshot to reflect the current regime and
+	which laws are active or unavailable, and sends validated requests to the
+	server for every change.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Net = require(ReplicatedStorage.Nexus.Net)
+local NetRoutes = require(ReplicatedStorage.Nexus.NetRoutes)
+local Governments = require(ReplicatedStorage.Nexus.Config.Governments)
+local Laws = require(ReplicatedStorage.Nexus.Config.Laws)
+
+local Create = require(script.Parent.Parent.UI.Create)
+local Theme = require(script.Parent.Parent.UI.Theme)
+
+local PoliticsController = {
+	Name = "PoliticsController",
+}
+
+PoliticsController._panel = nil :: Frame?
+PoliticsController._taxLabel = nil :: TextLabel?
+PoliticsController._govButtons = {} :: { [string]: TextButton }
+PoliticsController._lawButtons = {} :: { [string]: TextButton }
+
+local function request(route: string, payload: any)
+	task.spawn(function()
+		Net.request(route, payload)
+	end)
+end
+
+local function sectionLabel(text: string, order: number): TextLabel
+	return Create("TextLabel", {
+		LayoutOrder = order,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 22),
+		Font = Theme.font.bold,
+		Text = text,
+		TextColor3 = Theme.color.accent,
+		TextSize = 14,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}) :: TextLabel
+end
+
+function PoliticsController:_adjustTax(delta: number)
+	local StateController = require(script.Parent.StateController)
+	local nation = StateController:GetNation()
+	if not nation then
+		return
+	end
+	local rate = math.clamp(nation.politics.taxRate + delta, 0, 1)
+	request(NetRoutes.SET_TAX_RATE, { rate = rate })
+end
+
+function PoliticsController:_build()
+	local HudController = require(script.Parent.HudController)
+	local gui = HudController:GetGui()
+
+	local content = Create("ScrollingFrame", {
+		Name = "Content",
+		Position = UDim2.fromOffset(10, 42),
+		Size = UDim2.new(1, -20, 1, -52),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 4,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		[Create.Children] = {
+			Create("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }),
+		},
+	}) :: ScrollingFrame
+
+	-- Tax section.
+	sectionLabel("Taxation", 1).Parent = content
+	local taxRow = Create("Frame", {
+		LayoutOrder = 2,
+		BackgroundColor3 = Theme.color.panelLight,
+		Size = UDim2.new(1, 0, 0, 44),
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+			Create("TextButton", {
+				Text = "−",
+				Font = Theme.font.bold,
+				TextSize = 22,
+				TextColor3 = Theme.color.text,
+				BackgroundColor3 = Theme.color.accentDim,
+				Size = UDim2.fromOffset(40, 32),
+				Position = UDim2.fromOffset(8, 6),
+				[Create.Children] = { Create("UICorner", { CornerRadius = UDim.new(0, 6) }) },
+				[Create.Event] = { Activated = function()
+					self:_adjustTax(-0.05)
+				end },
+			}),
+			Create("TextButton", {
+				Text = "+",
+				Font = Theme.font.bold,
+				TextSize = 22,
+				TextColor3 = Theme.color.text,
+				BackgroundColor3 = Theme.color.accentDim,
+				Size = UDim2.fromOffset(40, 32),
+				AnchorPoint = Vector2.new(1, 0),
+				Position = UDim2.new(1, -8, 0, 6),
+				[Create.Children] = { Create("UICorner", { CornerRadius = UDim.new(0, 6) }) },
+				[Create.Event] = { Activated = function()
+					self:_adjustTax(0.05)
+				end },
+			}),
+			Create("TextLabel", {
+				Name = "TaxValue",
+				BackgroundTransparency = 1,
+				Size = UDim2.new(1, -100, 1, 0),
+				Position = UDim2.fromOffset(50, 0),
+				Font = Theme.font.bold,
+				Text = "Tax: 15%",
+				TextColor3 = Theme.color.text,
+				TextSize = 16,
+			}),
+		},
+	}) :: Frame
+	taxRow.Parent = content
+	self._taxLabel = taxRow:FindFirstChild("TaxValue") :: TextLabel
+
+	-- Government section.
+	sectionLabel("Government", 3).Parent = content
+	local govOrder = 4
+	for id, def in Governments do
+		local btn = Create("TextButton", {
+			LayoutOrder = govOrder,
+			BackgroundColor3 = Theme.color.panelLight,
+			Size = UDim2.new(1, 0, 0, 40),
+			Text = "",
+			AutoButtonColor = true,
+			[Create.Children] = {
+				Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+				Create("TextLabel", {
+					BackgroundTransparency = 1,
+					Position = UDim2.fromOffset(10, 0),
+					Size = UDim2.new(1, -16, 1, 0),
+					Font = Theme.font.medium,
+					Text = def.displayName,
+					TextColor3 = Theme.color.text,
+					TextSize = 13,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}),
+			},
+			[Create.Event] = { Activated = function()
+				request(NetRoutes.SET_GOVERNMENT, { government = id })
+			end },
+		}) :: TextButton
+		btn.Parent = content
+		self._govButtons[id] = btn
+		govOrder += 1
+	end
+
+	-- Laws section.
+	sectionLabel("Laws", 100).Parent = content
+	local lawOrder = 101
+	for id, def in Laws do
+		local btn = Create("TextButton", {
+			LayoutOrder = lawOrder,
+			BackgroundColor3 = Theme.color.panelLight,
+			Size = UDim2.new(1, 0, 0, 46),
+			Text = "",
+			AutoButtonColor = true,
+			[Create.Children] = {
+				Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+				Create("TextLabel", {
+					BackgroundTransparency = 1,
+					Position = UDim2.fromOffset(10, 5),
+					Size = UDim2.new(1, -16, 0, 18),
+					Font = Theme.font.medium,
+					Text = def.displayName,
+					TextColor3 = Theme.color.text,
+					TextSize = 13,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}),
+				Create("TextLabel", {
+					BackgroundTransparency = 1,
+					Position = UDim2.fromOffset(10, 24),
+					Size = UDim2.new(1, -16, 0, 16),
+					Font = Theme.font.regular,
+					Text = def.description,
+					TextColor3 = Theme.color.textDim,
+					TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+				}),
+			},
+			[Create.Event] = { Activated = function()
+				request(NetRoutes.TOGGLE_LAW, { id = id })
+			end },
+		}) :: TextButton
+		btn.Parent = content
+		self._lawButtons[id] = btn
+		lawOrder += 1
+	end
+
+	local panel = Create("Frame", {
+		Name = "PoliticsPanel",
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.fromOffset(16, 0),
+		Size = UDim2.fromOffset(280, 460),
+		BackgroundColor3 = Theme.color.panel,
+		BackgroundTransparency = 0.05,
+		Visible = false,
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = Theme.corner }),
+			Create("UIStroke", { Color = Theme.color.stroke, Thickness = 1 }),
+			Create("TextLabel", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(14, 10),
+				Size = UDim2.new(1, -28, 0, 22),
+				Font = Theme.font.bold,
+				Text = "Government",
+				TextColor3 = Theme.color.text,
+				TextSize = 17,
+				TextXAlignment = Enum.TextXAlignment.Left,
+			}),
+			content,
+		},
+	}) :: Frame
+	-- Anchor the panel vertically centred but below the stats panel visually.
+	panel.Position = UDim2.new(0, 16, 0.5, 20)
+	panel.Parent = gui
+	self._panel = panel
+end
+
+function PoliticsController:_refresh()
+	local StateController = require(script.Parent.StateController)
+	local nation = StateController:GetNation()
+	if not nation then
+		return
+	end
+	if self._taxLabel then
+		self._taxLabel.Text = ("Tax: %d%%"):format(math.floor(nation.politics.taxRate * 100 + 0.5))
+	end
+	for id, btn in self._govButtons do
+		local current = nation.politics.government == id
+		btn.BackgroundColor3 = current and Theme.color.accentDim or Theme.color.panelLight
+	end
+	for id, btn in self._lawButtons do
+		local active = nation.politics.activeLaws[id] == true
+		local def = Laws[id]
+		local locked = def.requiresTech ~= nil and not nation.research.unlocked[def.requiresTech]
+		local forbidden = table.find(def.forbiddenGovernments, nation.politics.government) ~= nil
+		if active then
+			btn.BackgroundColor3 = Theme.color.accentDim
+		elseif locked or forbidden then
+			btn.BackgroundColor3 = Theme.color.bg
+		else
+			btn.BackgroundColor3 = Theme.color.panelLight
+		end
+	end
+end
+
+function PoliticsController:Start()
+	local HudController = require(script.Parent.HudController)
+	local StateController = require(script.Parent.StateController)
+
+	self:_build()
+	HudController:AddButton("🏛 Politics", function()
+		if self._panel then
+			self._panel.Visible = not self._panel.Visible
+		end
+	end)
+
+	StateController.Changed:Connect(function()
+		self:_refresh()
+	end)
+	if StateController:IsReady() then
+		self:_refresh()
+	end
+end
+
+return PoliticsController
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000037"><Properties><string name="Name">ResearchController</string><ProtectedString name="Source">--!strict
+--[[
+	Controllers/ResearchController.luau
+	The technology panel. Lists every tech grouped by branch with a live status —
+	researched, in-progress (with a progress bar), available, or locked behind
+	prerequisites — and lets the player commit research to an available tech.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Net = require(ReplicatedStorage.Nexus.Net)
+local NetRoutes = require(ReplicatedStorage.Nexus.NetRoutes)
+local Technologies = require(ReplicatedStorage.Nexus.Config.Technologies)
+
+local Create = require(script.Parent.Parent.UI.Create)
+local Format = require(script.Parent.Parent.UI.Format)
+local Theme = require(script.Parent.Parent.UI.Theme)
+
+local ResearchController = {
+	Name = "ResearchController",
+}
+
+ResearchController._panel = nil :: Frame?
+ResearchController._rows = {} :: { [string]: Frame }
+
+local function prereqsMet(nation: any, def: any): boolean
+	for _, req in def.requires do
+		if not nation.research.unlocked[req] then
+			return false
+		end
+	end
+	return true
+end
+
+function ResearchController:_build()
+	local HudController = require(script.Parent.HudController)
+	local gui = HudController:GetGui()
+
+	local content = Create("ScrollingFrame", {
+		Name = "Content",
+		Position = UDim2.fromOffset(10, 42),
+		Size = UDim2.new(1, -20, 1, -52),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 4,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		[Create.Children] = {
+			Create("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }),
+		},
+	}) :: ScrollingFrame
+
+	-- Stable order: branch then cost.
+	local order = {}
+	for id in Technologies do
+		table.insert(order, id)
+	end
+	table.sort(order, function(a, b)
+		local da, db = Technologies[a], Technologies[b]
+		if da.branch ~= db.branch then
+			return da.branch &lt; db.branch
+		end
+		return da.cost &lt; db.cost
+	end)
+
+	for i, id in order do
+		local def = Technologies[id]
+		local row = Create("TextButton", {
+			LayoutOrder = i,
+			BackgroundColor3 = Theme.color.panelLight,
+			Size = UDim2.new(1, 0, 0, 58),
+			Text = "",
+			AutoButtonColor = true,
+			[Create.Children] = {
+				Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+				Create("TextLabel", {
+					Name = "Name",
+					BackgroundTransparency = 1,
+					Position = UDim2.fromOffset(10, 6),
+					Size = UDim2.new(1, -80, 0, 18),
+					Font = Theme.font.bold,
+					Text = def.displayName,
+					TextColor3 = Theme.color.text,
+					TextSize = 14,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}),
+				Create("TextLabel", {
+					Name = "Desc",
+					BackgroundTransparency = 1,
+					Position = UDim2.fromOffset(10, 24),
+					Size = UDim2.new(1, -80, 0, 16),
+					Font = Theme.font.regular,
+					Text = def.description,
+					TextColor3 = Theme.color.textDim,
+					TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+				}),
+				Create("TextLabel", {
+					Name = "Status",
+					BackgroundTransparency = 1,
+					AnchorPoint = Vector2.new(1, 0),
+					Position = UDim2.new(1, -10, 0, 6),
+					Size = UDim2.fromOffset(70, 18),
+					Font = Theme.font.bold,
+					Text = "✦" .. Format.abbrev(def.cost),
+					TextColor3 = Theme.color.accent,
+					TextSize = 12,
+					TextXAlignment = Enum.TextXAlignment.Right,
+				}),
+				-- Progress bar (shown only for the active tech).
+				Create("Frame", {
+					Name = "Bar",
+					BackgroundColor3 = Theme.color.bg,
+					Position = UDim2.fromOffset(10, 46),
+					Size = UDim2.new(1, -20, 0, 5),
+					Visible = false,
+					[Create.Children] = {
+						Create("UICorner", { CornerRadius = UDim.new(0, 3) }),
+						Create("Frame", {
+							Name = "Fill",
+							BackgroundColor3 = Theme.color.accent,
+							Size = UDim2.new(0, 0, 1, 0),
+							[Create.Children] = { Create("UICorner", { CornerRadius = UDim.new(0, 3) }) },
+						}),
+					},
+				}),
+			},
+			[Create.Event] = { Activated = function()
+				self:_onClick(id)
+			end },
+		}) :: Frame
+		row.Parent = content
+		self._rows[id] = row
+	end
+
+	local panel = Create("Frame", {
+		Name = "ResearchPanel",
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -16, 0.5, 20),
+		Size = UDim2.fromOffset(300, 460),
+		BackgroundColor3 = Theme.color.panel,
+		BackgroundTransparency = 0.05,
+		Visible = false,
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = Theme.corner }),
+			Create("UIStroke", { Color = Theme.color.stroke, Thickness = 1 }),
+			Create("TextLabel", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(14, 10),
+				Size = UDim2.new(1, -28, 0, 22),
+				Font = Theme.font.bold,
+				Text = "Technology",
+				TextColor3 = Theme.color.text,
+				TextSize = 17,
+				TextXAlignment = Enum.TextXAlignment.Left,
+			}),
+			content,
+		},
+	}) :: Frame
+	panel.Parent = gui
+	self._panel = panel
+end
+
+function ResearchController:_onClick(id: string)
+	local StateController = require(script.Parent.StateController)
+	local nation = StateController:GetNation()
+	if not nation then
+		return
+	end
+	local def = Technologies[id]
+	if nation.research.unlocked[id] then
+		return
+	end
+	if not prereqsMet(nation, def) then
+		local Notif = require(script.Parent.NotificationController)
+		Notif:Show("warning", "Locked", "Complete prerequisite research first.")
+		return
+	end
+	task.spawn(function()
+		Net.request(NetRoutes.START_RESEARCH, { id = id })
+	end)
+end
+
+function ResearchController:_refresh()
+	local StateController = require(script.Parent.StateController)
+	local nation = StateController:GetNation()
+	if not nation then
+		return
+	end
+	for id, row in self._rows do
+		local def = Technologies[id]
+		local status = row:FindFirstChild("Status") :: TextLabel
+		local bar = row:FindFirstChild("Bar") :: Frame
+		local fill = bar:FindFirstChild("Fill") :: Frame
+
+		if nation.research.unlocked[id] then
+			row.BackgroundColor3 = Color3.fromRGB(34, 54, 40)
+			status.Text = "✓ Done"
+			status.TextColor3 = Theme.color.good
+			bar.Visible = false
+		elseif nation.research.current == id then
+			row.BackgroundColor3 = Theme.color.accentDim
+			local pct = math.clamp(nation.research.progress / def.cost, 0, 1)
+			status.Text = ("%d%%"):format(math.floor(pct * 100 + 0.5))
+			status.TextColor3 = Theme.color.text
+			bar.Visible = true
+			fill.Size = UDim2.new(pct, 0, 1, 0)
+		elseif prereqsMet(nation, def) then
+			row.BackgroundColor3 = Theme.color.panelLight
+			status.Text = "✦" .. Format.abbrev(def.cost)
+			status.TextColor3 = Theme.color.accent
+			bar.Visible = false
+		else
+			row.BackgroundColor3 = Theme.color.bg
+			status.Text = "🔒"
+			status.TextColor3 = Theme.color.textDim
+			bar.Visible = false
+		end
+	end
+end
+
+function ResearchController:Start()
+	local HudController = require(script.Parent.HudController)
+	local StateController = require(script.Parent.StateController)
+
+	self:_build()
+	HudController:AddButton("🔬 Research", function()
+		if self._panel then
+			self._panel.Visible = not self._panel.Visible
+		end
+	end)
+
+	StateController.Changed:Connect(function()
+		self:_refresh()
+	end)
+	if StateController:IsReady() then
+		self:_refresh()
+	end
+end
+
+return ResearchController
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000038"><Properties><string name="Name">StateController</string><ProtectedString name="Source">--!strict
+--[[
+	Controllers/StateController.luau
+	The client's single source of truth for replicated nation state. It listens
+	for STATE_SYNC snapshots, stores the latest, and fires a Changed signal that
+	every panel subscribes to. No other controller talks to the sync route
+	directly, so there is exactly one place the UI's data model updates.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Logger = require(ReplicatedStorage.Nexus.Logger)
+local Net = require(ReplicatedStorage.Nexus.Net)
+local NetRoutes = require(ReplicatedStorage.Nexus.NetRoutes)
+local Signal = require(ReplicatedStorage.Nexus.Signal)
+local Types = require(ReplicatedStorage.Nexus.Types)
+
+type Nation = Types.Nation
+
+local log = Logger.new("StateController")
+
+local StateController = {
+	Name = "StateController",
+	Changed = Signal.new() :: any, -- fires (snapshot)
+}
+
+StateController._snapshot = nil :: any
+
+function StateController:GetSnapshot(): any
+	return self._snapshot
+end
+
+function StateController:GetNation(): Nation?
+	return self._snapshot and self._snapshot.nation or nil
+end
+
+function StateController:GetStats(): any
+	return self._snapshot and self._snapshot.stats or {}
+end
+
+--- True once the first snapshot has arrived (used to gate UI construction).
+function StateController:IsReady(): boolean
+	return self._snapshot ~= nil
+end
+
+function StateController:Init()
+	Net.onEvent(NetRoutes.STATE_SYNC, function(snapshot)
+		if typeof(snapshot) ~= "table" or typeof(snapshot.nation) ~= "table" then
+			return
+		end
+		local first = self._snapshot == nil
+		self._snapshot = snapshot
+		self.Changed:Fire(snapshot)
+		if first then
+			log:Info("received first nation snapshot")
+		end
+	end)
+end
+
+return StateController
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000039"><Properties><string name="Name">WorldController</string><ProtectedString name="Source">--!strict
+--[[
+	Controllers/WorldController.luau
+	Builds the 3D city view: a ground plate, an RTS-style overhead camera you can
+	pan and zoom, and one part per building rendered from the replicated snapshot.
+
+	Visuals are intentionally client-side and non-authoritative — the server owns
+	the data; this controller only draws it. That keeps the network light and lets
+	the world be re-themed (or swapped for Toolbox models) without touching
+	gameplay code. Parts are tagged with a `buildingId` attribute so BuildController
+	can pick them for selection.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+
+local Buildings = require(ReplicatedStorage.Nexus.Config.Buildings)
+local WorldGrid = require(ReplicatedStorage.Nexus.WorldGrid)
+
+local Theme = require(script.Parent.Parent.UI.Theme)
+
+local CATEGORY_COLOR: { [string]: Color3 } = {
+	Housing = Color3.fromRGB(120, 170, 235),
+	Power = Color3.fromRGB(240, 200, 90),
+	Food = Color3.fromRGB(140, 200, 110),
+	Industry = Color3.fromRGB(200, 140, 90),
+	Commerce = Color3.fromRGB(150, 210, 200),
+	Research = Color3.fromRGB(150, 130, 235),
+	Services = Color3.fromRGB(220, 150, 200),
+	Government = Color3.fromRGB(230, 230, 240),
+}
+
+local WorldController = {
+	Name = "WorldController",
+}
+
+WorldController._parts = {} :: { [string]: BasePart }
+WorldController._cityFolder = nil :: Folder?
+WorldController._baseplate = nil :: BasePart?
+
+-- Camera state.
+WorldController._focus = Vector3.new(0, 0, 0)
+WorldController._distance = 180
+WorldController._pitch = math.rad(58)
+
+function WorldController:GetCityFolder(): Folder
+	return assert(self._cityFolder, "city folder not ready")
+end
+
+function WorldController:GetBaseplate(): BasePart
+	return assert(self._baseplate, "baseplate not ready")
+end
+
+-- ---- World construction ---------------------------------------------------
+
+function WorldController:_buildWorld()
+	local base = Instance.new("Part")
+	base.Name = "NexusGround"
+	base.Anchored = true
+	base.Size = Vector3.new(WorldGrid.SPAN, 1, WorldGrid.SPAN)
+	base.Position = Vector3.new(0, WorldGrid.GROUND_Y - 0.5, 0)
+	base.Color = Color3.fromRGB(38, 46, 42)
+	base.Material = Enum.Material.Grass
+	base.TopSurface = Enum.SurfaceType.Smooth
+	base.Parent = Workspace
+
+	-- A subtle border so the buildable area reads as a defined territory.
+	local border = Instance.new("SelectionBox")
+	border.Adornee = base
+	border.Color3 = Theme.color.accentDim
+	border.LineThickness = 0.2
+	border.Transparency = 0.4
+	border.Parent = base
+
+	self._baseplate = base
+
+	local folder = Instance.new("Folder")
+	folder.Name = "NexusCity"
+	folder.Parent = Workspace
+	self._cityFolder = folder
+end
+
+-- ---- Camera ---------------------------------------------------------------
+
+function WorldController:_setupCamera()
+	while not Workspace.CurrentCamera do
+		task.wait()
+	end
+	local camera = Workspace.CurrentCamera
+	camera.CameraType = Enum.CameraType.Scriptable
+
+	local dragging = false
+	local lastPos: Vector2? = nil
+
+	local function updateCamera()
+		local dir = Vector3.new(0, math.sin(self._pitch), math.cos(self._pitch))
+		local camPos = self._focus + dir * self._distance
+		camera.CFrame = CFrame.lookAt(camPos, self._focus)
+	end
+
+	UserInputService.InputBegan:Connect(function(input, gameProcessed)
+		if gameProcessed then
+			return
+		end
+		if input.UserInputType == Enum.UserInputType.MouseButton2
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			dragging = true
+			lastPos = Vector2.new(input.Position.X, input.Position.Y)
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton2
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			dragging = false
+			lastPos = nil
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input, gameProcessed)
+		if input.UserInputType == Enum.UserInputType.MouseWheel then
+			self._distance = math.clamp(self._distance - input.Position.Z * 18, 60, 400)
+		elseif dragging and lastPos and
+			(input.UserInputType == Enum.UserInputType.MouseMovement
+				or input.UserInputType == Enum.UserInputType.Touch)
+		then
+			if gameProcessed and input.UserInputType == Enum.UserInputType.Touch then
+				return
+			end
+			local pos = Vector2.new(input.Position.X, input.Position.Y)
+			local delta = pos - lastPos
+			lastPos = pos
+			local speed = self._distance / 600
+			-- Screen-drag pans the focus across the ground plane.
+			self._focus += Vector3.new(-delta.X * speed, 0, -delta.Y * speed)
+		end
+	end)
+
+	RunService:BindToRenderStep("NexusCamera", Enum.RenderPriority.Camera.Value, function()
+		-- Keyboard panning (PC).
+		local move = Vector3.zero
+		if UserInputService:IsKeyDown(Enum.KeyCode.W) then
+			move += Vector3.new(0, 0, -1)
+		end
+		if UserInputService:IsKeyDown(Enum.KeyCode.S) then
+			move += Vector3.new(0, 0, 1)
+		end
+		if UserInputService:IsKeyDown(Enum.KeyCode.A) then
+			move += Vector3.new(-1, 0, 0)
+		end
+		if UserInputService:IsKeyDown(Enum.KeyCode.D) then
+			move += Vector3.new(1, 0, 0)
+		end
+		if move.Magnitude &gt; 0 then
+			self._focus += move.Unit * (self._distance * 0.02)
+		end
+		-- Keep the focus over the map.
+		local lim = WorldGrid.SPAN / 2
+		self._focus = Vector3.new(
+			math.clamp(self._focus.X, -lim, lim),
+			0,
+			math.clamp(self._focus.Z, -lim, lim)
+		)
+		updateCamera()
+	end)
+end
+
+-- ---- Building rendering ----------------------------------------------------
+
+local function makePart(): BasePart
+	local part = Instance.new("Part")
+	part.Anchored = true
+	part.TopSurface = Enum.SurfaceType.Smooth
+	part.BottomSurface = Enum.SurfaceType.Smooth
+	part.Material = Enum.Material.SmoothPlastic
+	return part
+end
+
+function WorldController:_syncBuildings(nation: any)
+	local folder = self:GetCityFolder()
+	local seen: { [string]: boolean } = {}
+
+	for id, building in nation.buildings do
+		local def = Buildings[building.kind]
+		if not def then
+			continue
+		end
+		seen[id] = true
+
+		local rot = building.rotation
+		local w, h = def.footprint.w, def.footprint.h
+		if rot == 90 or rot == 270 then
+			w, h = h, w
+		end
+		local height = 4 + building.level * 2.5
+		local center = WorldGrid.footprintCenter(building.position.x, building.position.z, w, h)
+
+		local part = self._parts[id]
+		if not part then
+			part = makePart()
+			part:SetAttribute("buildingId", id)
+			part.Parent = folder
+			self._parts[id] = part
+		end
+		part.Size = Vector3.new(w * WorldGrid.STUDS * 0.9, height, h * WorldGrid.STUDS * 0.9)
+		part.Position = center + Vector3.new(0, height / 2, 0)
+		part.Color = CATEGORY_COLOR[def.category] or Color3.fromRGB(180, 180, 180)
+		-- Derelict / offline buildings read as faded.
+		part.Transparency = building.active and 0 or 0.5
+	end
+
+	for id, part in self._parts do
+		if not seen[id] then
+			part:Destroy()
+			self._parts[id] = nil
+		end
+	end
+end
+
+function WorldController:Init()
+	self:_buildWorld()
+	self:_setupCamera()
+end
+
+function WorldController:Start()
+	local StateController = require(script.Parent.StateController)
+	StateController.Changed:Connect(function(snapshot)
+		self:_syncBuildings(snapshot.nation)
+	end)
+	if StateController:IsReady() then
+		self:_syncBuildings(StateController:GetSnapshot().nation)
+	end
+end
+
+return WorldController
+</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000045"><Properties><string name="Name">UI</string></Properties><Item class="Folder" referent="RBX00000041"><Properties><string name="Name">Components</string></Properties></Item><Item class="ModuleScript" referent="RBX00000042"><Properties><string name="Name">Create</string><ProtectedString name="Source">--!strict
+--[[
+	UI/Create.luau
+	A tiny declarative helper for building Instance trees without the noise of
+	imperative property assignment. Inspired by common Roblox UI idioms but kept
+	dependency-free.
+
+	Usage:
+		Create("TextButton", {
+			Text = "Build",
+			Size = UDim2.fromOffset(120, 40),
+			[Create.Event] = { Activated = function() ... end },
+			[Create.Children] = { Create("UICorner", { CornerRadius = ... }) },
+		})
+]]
+
+local Create = {}
+
+-- Sentinel keys used inside the property table.
+local CHILDREN = newproxy(false)
+local EVENT = newproxy(false)
+
+Create.Children = CHILDREN
+Create.Event = EVENT
+
+function Create.build(className: string, props: { [any]: any }?): Instance
+	local instance = Instance.new(className)
+	if props then
+		local children = props[CHILDREN]
+		local events = props[EVENT]
+
+		for key, value in props do
+			if key ~= CHILDREN and key ~= EVENT then
+				(instance :: any)[key] = value
+			end
+		end
+
+		if events then
+			for eventName, handler in events do
+				(instance :: any)[eventName]:Connect(handler)
+			end
+		end
+		if children then
+			for _, child in children do
+				child.Parent = instance
+			end
+		end
+	end
+	return instance
+end
+
+-- Allow calling the module table itself: Create("Frame", { ... }).
+local callable = setmetatable(Create, {
+	__call = function(_, className: string, props: { [any]: any }?): Instance
+		return Create.build(className, props)
+	end,
+})
+
+-- The `any` cast lets callers use both `Create("Frame")` and `Create.Children`.
+return (callable :: any) :: (((className: string, props: { [any]: any }?) -&gt; Instance) &amp; typeof(Create))
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000043"><Properties><string name="Name">Format</string><ProtectedString name="Source">--!strict
+--[[
+	UI/Format.luau
+	Number/text formatting shared by every panel, so "12.3k" and "+4.5%" look the
+	same everywhere.
+]]
+
+local Format = {}
+
+--- Abbreviate a number: 1500 -&gt; "1.5k", 2_300_000 -&gt; "2.3M".
+function Format.abbrev(n: number): string
+	local abs = math.abs(n)
+	local sign = n &lt; 0 and "-" or ""
+	if abs &gt;= 1e9 then
+		return ("%s%.2fB"):format(sign, abs / 1e9)
+	elseif abs &gt;= 1e6 then
+		return ("%s%.2fM"):format(sign, abs / 1e6)
+	elseif abs &gt;= 1e3 then
+		return ("%s%.1fk"):format(sign, abs / 1e3)
+	end
+	return ("%s%d"):format(sign, math.floor(abs + 0.5))
+end
+
+--- A signed flow value, e.g. "+120" or "-45".
+function Format.signed(n: number): string
+	local prefix = n &gt;= 0 and "+" or ""
+	return prefix .. Format.abbrev(n)
+end
+
+function Format.percent(fraction: number): string
+	return ("%d%%"):format(math.floor(fraction * 100 + 0.5))
+end
+
+function Format.round(n: number): string
+	return tostring(math.floor(n + 0.5))
+end
+
+return Format
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000044"><Properties><string name="Name">Theme</string><ProtectedString name="Source">--!strict
+--[[
+	UI/Theme.luau
+	Design tokens for the whole interface. One place to restyle the game. Colours
+	are chosen for a dark, modern strategy dashboard with strong contrast so the
+	HUD stays legible on PC, mobile and console.
+]]
+
+local Theme = {}
+
+Theme.color = {
+	bg = Color3.fromRGB(18, 21, 28),
+	panel = Color3.fromRGB(26, 30, 40),
+	panelLight = Color3.fromRGB(36, 42, 55),
+	stroke = Color3.fromRGB(52, 60, 78),
+	accent = Color3.fromRGB(90, 150, 255),
+	accentDim = Color3.fromRGB(58, 96, 168),
+	text = Color3.fromRGB(232, 238, 248),
+	textDim = Color3.fromRGB(150, 160, 178),
+	good = Color3.fromRGB(92, 210, 116),
+	warn = Color3.fromRGB(240, 190, 70),
+	bad = Color3.fromRGB(238, 96, 96),
+}
+
+Theme.font = {
+	regular = Enum.Font.Gotham,
+	medium = Enum.Font.GothamMedium,
+	bold = Enum.Font.GothamBold,
+}
+
+Theme.severityColor = {
+	info = Theme.color.accent,
+	success = Theme.color.good,
+	warning = Theme.color.warn,
+	error = Theme.color.bad,
+}
+
+Theme.corner = UDim.new(0, 10)
+Theme.pad = 10
+
+return Theme
+</ProtectedString></Properties></Item></Item></Item></Item></Item><Item class="Workspace" referent="RBX00000051"><Properties><bool name="StreamingEnabled">true</bool></Properties></Item><Item class="Players" referent="RBX00000052"><Properties><bool name="CharacterAutoLoads">false</bool></Properties></Item>
+</roblox>

@@ -3,6 +3,8 @@
 *.rbxlx
 *.rbxl.lock
 *.rbxlx.lock
+# ...but keep the prebuilt, double-clickable place file in the repo.
+!Nexus.rbxlx
 *.rbxm
 *.rbxmx
 

@@ -34,7 +34,22 @@ phases — see [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Getting it into Roblox Studio
 
-The project syncs with [Rojo](https://rojo.space).
+### Option A — just open the place file (no Rojo)
+
+Download **[`Nexus.rbxlx`](Nexus.rbxlx)** and **double-click it** (or in Studio:
+*File → Open from File…*). That's it — the whole game is inside. To rebuild the
+place after editing the source, no toolchain is needed:
+
+```sh
+python3 tools/build_place.py     # regenerates Nexus.rbxlx from src/
+```
+
+> Enable **Game Settings → Security → Studio Access to API Services** for saving
+> to work; otherwise DataService uses an in-memory mock and progress won't persist.
+
+### Option B — live-sync with Rojo (for ongoing development)
+
+The project also syncs with [Rojo](https://rojo.space).
 
 1. Install the toolchain with [Rokit](https://github.com/rojo-rbx/rokit):
    ```sh
