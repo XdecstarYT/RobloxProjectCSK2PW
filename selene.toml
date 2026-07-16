@@ -1,0 +1,6 @@
+std = "roblox"
+
+[rules]
+# Framework relies on runtime service discovery; these are intentional.
+global_usage = "allow"
+multiple_statements = "allow"
