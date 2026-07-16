@@ -3,7 +3,7 @@
 <Meta name="ExplicitAutoJoints">true</Meta>
 <External>null</External>
 <External>nil</External>
-<Item class="ReplicatedStorage" referent="RBX00000065"><Properties></Properties><Item class="Folder" referent="RBX00000020"><Properties><string name="Name">Nexus</string></Properties><Item class="ModuleScript" referent="RBX00000010"><Properties><string name="Name">Config</string><ProtectedString name="Source">--!strict
+<Item class="ReplicatedStorage" referent="RBX00000067"><Properties></Properties><Item class="Folder" referent="RBX00000020"><Properties><string name="Name">Nexus</string></Properties><Item class="ModuleScript" referent="RBX00000010"><Properties><string name="Name">Config</string><ProtectedString name="Source">--!strict
 --[[
 	Config/init.luau
 	Aggregates every configuration table behind one require. Because this folder
@@ -1834,7 +1834,7 @@ function WorldGrid.worldToTile(position: Vector3): (number, number)
 end
 
 return WorldGrid
-</ProtectedString></Properties></Item></Item></Item><Item class="ServerScriptService" referent="RBX00000066"><Properties></Properties><Item class="Script" referent="RBX00000041"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item></Item><Item class="ServerScriptService" referent="RBX00000068"><Properties></Properties><Item class="Script" referent="RBX00000041"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
 --[[
 	init.server.luau
 	Server bootstrap. Requires every service, registers it with the Framework,
@@ -5231,7 +5231,7 @@ function Validation.readPosition(payload: any): ({ x: number, z: number })?
 end
 
 return Validation
-</ProtectedString></Properties></Item></Item></Item></Item><Item class="StarterPlayer" referent="RBX00000068"><Properties></Properties><Item class="StarterPlayerScripts" referent="RBX00000067"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX00000064"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item></Item></Item><Item class="StarterPlayer" referent="RBX00000070"><Properties></Properties><Item class="StarterPlayerScripts" referent="RBX00000069"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX00000066"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
 --[[
 	init.client.luau
 	Client bootstrap. Registers every controller with the ClientFramework, then
@@ -5259,6 +5259,7 @@ local ORDER = {
 	"BuildController",
 	"PoliticsController",
 	"ResearchController",
+	"EconomyController",
 	"DiplomacyController",
 	"TerritoryController",
 	"MilitaryController",
@@ -5339,7 +5340,7 @@ function ClientFramework.start()
 end
 
 return ClientFramework
-</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000056"><Properties><string name="Name">Controllers</string></Properties><Item class="ModuleScript" referent="RBX00000043"><Properties><string name="Name">AmbianceController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000057"><Properties><string name="Name">Controllers</string></Properties><Item class="ModuleScript" referent="RBX00000043"><Properties><string name="Name">AmbianceController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/AmbianceController.luau
 	Sets the mood: cinematic lighting, atmospheric depth and post-processing.
@@ -6479,7 +6480,317 @@ function DiplomacyController:Start()
 end
 
 return DiplomacyController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000046"><Properties><string name="Name">HudController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000046"><Properties><string name="Name">EconomyController</string><ProtectedString name="Source">--!strict
+--[[
+	Controllers/EconomyController.luau
+	A statistics dashboard: a live GDP graph (from the replicated gdpHistory), a
+	compact financial breakdown, and a contextual advisor that reads the current
+	snapshot and surfaces the most useful next moves. Everything is derived on the
+	client from data it already has — no extra network traffic.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Create = require(script.Parent.Parent.UI.Create)
+local Decor = require(script.Parent.Parent.UI.Decor)
+local Format = require(script.Parent.Parent.UI.Format)
+local Graph = require(script.Parent.Parent.UI.Graph)
+local Motion = require(script.Parent.Parent.UI.Motion)
+local Theme = require(script.Parent.Parent.UI.Theme)
+
+local EconomyController = {
+	Name = "EconomyController",
+}
+
+EconomyController._panel = nil :: Frame?
+EconomyController._update = nil :: ((values: { number }, color: Color3?) -&gt; ())?
+EconomyController._caption = nil :: TextLabel?
+EconomyController._cells = {} :: { [string]: TextLabel }
+EconomyController._advisor = nil :: ScrollingFrame?
+
+-- ---- Advisor rules ---------------------------------------------------------
+
+local function advise(nation: any, stats: any): { { text: string, color: Color3 } }
+	local tips = {}
+	local function add(color: Color3, text: string)
+		table.insert(tips, { text = text, color = color })
+	end
+
+	if (stats.powerNet or 0) &lt; 0 then
+		add(Theme.color.bad, "⚡ Power deficit — build a Power Plant; buildings are throttled.")
+	end
+	if (nation.resources.food or 0) &lt; 120 then
+		add(Theme.color.warn, "❖ Food is low — build Farms before your people go hungry.")
+	end
+	if nation.politics.taxRate &gt; 0.4 then
+		add(Theme.color.warn, "💸 Taxes are very high — happiness and approval will slide.")
+	end
+	if nation.population.happiness &lt; 45 then
+		add(Theme.color.warn, "🙁 Citizens are unhappy — add Parks/Services or cut taxes.")
+	end
+	if (stats.unemployment or 0) &gt; 0.2 then
+		add(Theme.color.warn, "🧑‍🏭 High unemployment — build Markets or Factories for jobs.")
+	end
+	if nation.economy.debt &gt; 0 then
+		add(Theme.color.warn, ("🏦 In debt (%s) — interest accrues each tick."):format(Format.abbrev(nation.economy.debt)))
+	end
+	if nation.politics.stability &lt; 40 then
+		add(Theme.color.bad, "⚖ Government unstable — raise approval and cut unrest.")
+	end
+	if not nation.research.current then
+		add(Theme.color.accent, "🔬 No active research — pick a technology to advance.")
+	end
+	if #nation.territory.regions &lt;= 1 and (nation.resources.influence or 0) &gt;= 40 then
+		add(Theme.color.accent, "🗺 Spend influence in Territory to claim a region for income.")
+	end
+
+	if #tips == 0 then
+		add(Theme.color.good, "✅ Your nation is thriving — expand, ally, or climb the ranks.")
+	end
+	return tips
+end
+
+-- ---- Panel -----------------------------------------------------------------
+
+function EconomyController:_cell(key: string, label: string): Frame
+	local value = Create("TextLabel", {
+		Name = "Value",
+		BackgroundTransparency = 1,
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -6, 0, 0),
+		Size = UDim2.new(0.55, 0, 1, 0),
+		Font = Theme.font.bold,
+		Text = "-",
+		TextColor3 = Theme.color.text,
+		TextSize = 13,
+		TextXAlignment = Enum.TextXAlignment.Right,
+	}) :: TextLabel
+	self._cells[key] = value
+
+	return Create("Frame", {
+		BackgroundColor3 = Theme.color.panelLight,
+		Size = UDim2.new(0.5, -4, 0, 26),
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = UDim.new(0, 6) }),
+			Create("TextLabel", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(8, 0),
+				Size = UDim2.new(0.5, 0, 1, 0),
+				Font = Theme.font.regular,
+				Text = label,
+				TextColor3 = Theme.color.textDim,
+				TextSize = 12,
+				TextXAlignment = Enum.TextXAlignment.Left,
+			}),
+			value,
+		},
+	}) :: Frame
+end
+
+function EconomyController:_build()
+	local HudController = require(script.Parent.HudController)
+	local gui = HudController:GetGui()
+
+	local graph, update = Graph.new(UDim2.new(1, -24, 0, 130))
+	graph.Position = UDim2.fromOffset(12, 60)
+	self._update = update
+
+	local caption = Create("TextLabel", {
+		BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(14, 36),
+		Size = UDim2.new(1, -28, 0, 18),
+		Font = Theme.font.medium,
+		Text = "GDP over time",
+		TextColor3 = Theme.color.textDim,
+		TextSize = 12,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}) :: TextLabel
+	self._caption = caption
+
+	local grid = Create("Frame", {
+		Position = UDim2.fromOffset(12, 200),
+		Size = UDim2.new(1, -24, 0, 108),
+		BackgroundTransparency = 1,
+		[Create.Children] = {
+			Create("UIGridLayout", {
+				CellSize = UDim2.new(0.5, -4, 0, 26),
+				CellPadding = UDim2.fromOffset(8, 8),
+				SortOrder = Enum.SortOrder.LayoutOrder,
+			}),
+		},
+	})
+	for _, spec in
+		{
+			{ "income", "Income" },
+			{ "expense", "Expense" },
+			{ "net", "Net / tick" },
+			{ "treasury", "Treasury" },
+			{ "debt", "Debt" },
+			{ "inflation", "Inflation" },
+			{ "unemployment", "Jobless" },
+			{ "power", "Power" },
+		}
+	do
+		self:_cell(spec[1], spec[2]).Parent = grid
+	end
+
+	local advisor = Create("ScrollingFrame", {
+		Position = UDim2.fromOffset(12, 340),
+		Size = UDim2.new(1, -24, 1, -350),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 4,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		[Create.Children] = {
+			Create("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }),
+		},
+	}) :: ScrollingFrame
+	self._advisor = advisor
+
+	local panel = Create("Frame", {
+		Name = "EconomyPanel",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(380, 500),
+		BackgroundColor3 = Theme.color.panel,
+		Visible = false,
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = Theme.corner }),
+			Create("UIStroke", { Color = Theme.color.stroke, Thickness = 1 }),
+			Create("TextLabel", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(14, 10),
+				Size = UDim2.new(1, -28, 0, 22),
+				Font = Theme.font.bold,
+				Text = "📊 Economy &amp; Advisor",
+				TextColor3 = Theme.color.text,
+				TextSize = 17,
+				TextXAlignment = Enum.TextXAlignment.Left,
+			}),
+			Create("TextLabel", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(14, 318),
+				Size = UDim2.new(1, -28, 0, 18),
+				Font = Theme.font.bold,
+				Text = "Advisor",
+				TextColor3 = Theme.color.accent2,
+				TextSize = 13,
+				TextXAlignment = Enum.TextXAlignment.Left,
+			}),
+			caption,
+			graph,
+			grid,
+			advisor,
+		},
+	}) :: Frame
+	Decor.gradient(panel, Theme.gradient.panel)
+	panel.Parent = gui
+	self._panel = panel
+end
+
+function EconomyController:_refresh(snapshot: any)
+	if not self._panel or not self._panel.Visible then
+		return -- only recompute while the panel is open
+	end
+	if not snapshot or not snapshot.nation then
+		return
+	end
+	local nation = snapshot.nation
+	local stats = snapshot.stats or {}
+
+	local history = nation.economy.gdpHistory or {}
+	if self._update then
+		self._update(history, Theme.color.accent)
+	end
+	if self._caption then
+		local peak = 0
+		for _, v in history do
+			peak = math.max(peak, v)
+		end
+		self._caption.Text = ("GDP — now %s · peak %s"):format(
+			Format.abbrev(nation.economy.gdp),
+			Format.abbrev(peak)
+		)
+	end
+
+	local set = function(key: string, text: string, color: Color3?)
+		local label = self._cells[key]
+		if label then
+			label.Text = text
+			label.TextColor3 = color or Theme.color.text
+		end
+	end
+	local net = stats.net or (nation.economy.lastTickIncome - nation.economy.lastTickExpense)
+	set("income", Format.abbrev(stats.income or nation.economy.lastTickIncome), Theme.color.good)
+	set("expense", Format.abbrev(stats.expense or nation.economy.lastTickExpense), Theme.color.warn)
+	set("net", Format.signed(net), net &gt;= 0 and Theme.color.good or Theme.color.bad)
+	set("treasury", Format.abbrev(nation.resources.money))
+	set("debt", Format.abbrev(nation.economy.debt), nation.economy.debt &gt; 0 and Theme.color.warn or Theme.color.text)
+	set("inflation", ("%.1f%%"):format(nation.economy.inflation))
+	set("unemployment", Format.percent(stats.unemployment or 0))
+	set("power", Format.signed(stats.powerNet or nation.resources.energy or 0),
+		(stats.powerNet or 0) &gt;= 0 and Theme.color.good or Theme.color.bad)
+
+	local advisor = self._advisor
+	if advisor then
+		for _, child in advisor:GetChildren() do
+			if child:IsA("GuiObject") then
+				child:Destroy()
+			end
+		end
+		for i, tip in advise(nation, stats) do
+			Create("Frame", {
+				LayoutOrder = i,
+				BackgroundColor3 = Theme.color.panelLight,
+				Size = UDim2.new(1, 0, 0, 34),
+				AutomaticSize = Enum.AutomaticSize.Y,
+				[Create.Children] = {
+					Create("UICorner", { CornerRadius = UDim.new(0, 6) }),
+					Create("Frame", {
+						BackgroundColor3 = tip.color,
+						Size = UDim2.new(0, 3, 1, -8),
+						Position = UDim2.fromOffset(6, 4),
+						[Create.Children] = { Create("UICorner", { CornerRadius = UDim.new(0, 2) }) },
+					}),
+					Create("TextLabel", {
+						BackgroundTransparency = 1,
+						Position = UDim2.fromOffset(16, 4),
+						Size = UDim2.new(1, -22, 1, -8),
+						Font = Theme.font.medium,
+						Text = tip.text,
+						TextColor3 = Theme.color.text,
+						TextSize = 12,
+						TextWrapped = true,
+						TextXAlignment = Enum.TextXAlignment.Left,
+						TextYAlignment = Enum.TextYAlignment.Top,
+						AutomaticSize = Enum.AutomaticSize.Y,
+					}),
+				},
+			}).Parent = advisor
+		end
+	end
+end
+
+function EconomyController:Start()
+	local HudController = require(script.Parent.HudController)
+	local StateController = require(script.Parent.StateController)
+
+	self:_build()
+	HudController:AddButton("📊 Economy", function()
+		if self._panel then
+			Motion.toggle(self._panel)
+			self:_refresh(StateController:GetSnapshot() or { nation = StateController:GetNation() })
+		end
+	end)
+
+	StateController.Changed:Connect(function(snapshot)
+		self:_refresh(snapshot)
+	end)
+end
+
+return EconomyController
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000047"><Properties><string name="Name">HudController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/HudController.luau
 	The persistent HUD: a top resource bar, a compact national-stats panel, and a
@@ -6805,7 +7116,7 @@ function HudController:Start()
 end
 
 return HudController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000047"><Properties><string name="Name">LeaderboardController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000048"><Properties><string name="Name">LeaderboardController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/LeaderboardController.luau
 	A ranked table of every nation in the world (players and AI) by power score.
@@ -6959,7 +7270,7 @@ function LeaderboardController:Start()
 end
 
 return LeaderboardController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000048"><Properties><string name="Name">MilitaryController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000049"><Properties><string name="Name">MilitaryController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/MilitaryController.luau
 	The (optional) armed-forces panel: recruit and disband army, navy and air
@@ -7183,7 +7494,7 @@ function MilitaryController:Start()
 end
 
 return MilitaryController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000049"><Properties><string name="Name">NotificationController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000050"><Properties><string name="Name">NotificationController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/NotificationController.luau
 	Renders transient server notifications as stacked toasts in the top-right.
@@ -7319,7 +7630,7 @@ function NotificationController:Start()
 end
 
 return NotificationController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000050"><Properties><string name="Name">PoliticsController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000051"><Properties><string name="Name">PoliticsController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/PoliticsController.luau
 	The governance panel: adjust the tax rate, switch government type, and
@@ -7600,7 +7911,7 @@ function PoliticsController:Start()
 end
 
 return PoliticsController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000051"><Properties><string name="Name">ResearchController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000052"><Properties><string name="Name">ResearchController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/ResearchController.luau
 	The technology panel. Lists every tech grouped by branch with a live status —
@@ -7845,7 +8156,7 @@ function ResearchController:Start()
 end
 
 return ResearchController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000052"><Properties><string name="Name">StateController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000053"><Properties><string name="Name">StateController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/StateController.luau
 	The client's single source of truth for replicated nation state. It listens
@@ -7905,7 +8216,7 @@ function StateController:Init()
 end
 
 return StateController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000053"><Properties><string name="Name">TerritoryController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000054"><Properties><string name="Name">TerritoryController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/TerritoryController.luau
 	The world map: a grid of claimable regions laid out from the Regions config
@@ -8112,7 +8423,7 @@ function TerritoryController:Start()
 end
 
 return TerritoryController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000054"><Properties><string name="Name">WorldController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000055"><Properties><string name="Name">WorldController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/WorldController.luau
 	Builds the 3D city view: a stylized ground with a glowing district grid,
@@ -8497,7 +8808,7 @@ function WorldController:Start()
 end
 
 return WorldController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000055"><Properties><string name="Name">WorldStateController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000056"><Properties><string name="Name">WorldStateController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/WorldStateController.luau
 	Client store for world-scope data that isn't part of the player's own nation:
@@ -8559,7 +8870,7 @@ function WorldStateController:Init()
 end
 
 return WorldStateController
-</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000063"><Properties><string name="Name">UI</string></Properties><Item class="Folder" referent="RBX00000057"><Properties><string name="Name">Components</string></Properties></Item><Item class="ModuleScript" referent="RBX00000058"><Properties><string name="Name">Create</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000065"><Properties><string name="Name">UI</string></Properties><Item class="Folder" referent="RBX00000058"><Properties><string name="Name">Components</string></Properties></Item><Item class="ModuleScript" referent="RBX00000059"><Properties><string name="Name">Create</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Create.luau
 	A tiny declarative helper for building Instance trees without the noise of
@@ -8619,7 +8930,7 @@ local callable = setmetatable(Create, {
 
 -- The `any` cast lets callers use both `Create("Frame")` and `Create.Children`.
 return (callable :: any) :: (((className: string, props: { [any]: any }?) -&gt; Instance) &amp; typeof(Create))
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000059"><Properties><string name="Name">Decor</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000060"><Properties><string name="Name">Decor</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Decor.luau
 	Small cosmetic helpers so every panel, chip and button gets the same finish
@@ -8687,7 +8998,7 @@ function Decor.shadow(frame: GuiObject): Frame
 end
 
 return Decor
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000060"><Properties><string name="Name">Format</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000061"><Properties><string name="Name">Format</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Format.luau
 	Number/text formatting shared by every panel, so "12.3k" and "+4.5%" look the
@@ -8725,7 +9036,88 @@ function Format.round(n: number): string
 end
 
 return Format
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000061"><Properties><string name="Name">Motion</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000062"><Properties><string name="Name">Graph</string><ProtectedString name="Source">--!strict
+--[[
+	UI/Graph.luau
+	A tiny, asset-free bar graph. Given a container size it returns the frame plus
+	an `update(values)` function that redraws scaled bars. Used by the economy
+	panel to visualise replicated GDP history. Bars are recreated on update, which
+	is cheap at the economy tick's cadence.
+]]
+
+local Create = require(script.Parent.Create)
+local Theme = require(script.Parent.Theme)
+
+local Graph = {}
+
+--- Returns (frame, update). `update(values, color?)` redraws the graph.
+function Graph.new(size: UDim2): (Frame, (values: { number }, color: Color3?) -&gt; ())
+	local plot = Create("Frame", {
+		Name = "Plot",
+		Size = UDim2.new(1, -8, 1, -8),
+		Position = UDim2.fromOffset(4, 4),
+		BackgroundTransparency = 1,
+	}) :: Frame
+
+	local frame = Create("Frame", {
+		Name = "Graph",
+		Size = size,
+		BackgroundColor3 = Theme.color.bg,
+		BackgroundTransparency = 0.25,
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+			Create("UIStroke", { Color = Theme.color.stroke, Thickness = 1, Transparency = 0.4 }),
+			plot,
+		},
+	}) :: Frame
+
+	local function update(values: { number }, color: Color3?)
+		for _, child in plot:GetChildren() do
+			if child:IsA("GuiObject") then
+				child:Destroy()
+			end
+		end
+		local n = #values
+		if n == 0 then
+			return
+		end
+		local maxV = 0
+		for _, v in values do
+			maxV = math.max(maxV, v)
+		end
+		if maxV &lt;= 0 then
+			maxV = 1
+		end
+		local barColor = color or Theme.color.accent
+		local slot = 1 / n
+		for i, v in values do
+			local h = math.clamp(v / maxV, 0.02, 1)
+			local bar = Create("Frame", {
+				Name = "Bar",
+				AnchorPoint = Vector2.new(0.5, 1),
+				Position = UDim2.new((i - 0.5) * slot, 0, 1, 0),
+				Size = UDim2.new(slot, -1, h, 0),
+				BackgroundColor3 = barColor,
+				BorderSizePixel = 0,
+				[Create.Children] = {
+					Create("UICorner", { CornerRadius = UDim.new(0, 2) }),
+					-- Taller bars glow a little warmer.
+					Create("UIGradient", {
+						Rotation = 90,
+						Color = ColorSequence.new(Theme.color.accent2, barColor),
+						Transparency = NumberSequence.new(0.05, 0.35),
+					}),
+				},
+			})
+			bar.Parent = plot
+		end
+	end
+
+	return frame, update
+end
+
+return Graph
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000063"><Properties><string name="Name">Motion</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Motion.luau
 	Tiny animation helpers so panels don't just snap on/off. Uses a UIScale child
@@ -8773,7 +9165,7 @@ function Motion.toggle(frame: GuiObject)
 end
 
 return Motion
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000062"><Properties><string name="Name">Theme</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000064"><Properties><string name="Name">Theme</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Theme.luau
 	Design tokens for the whole interface. One place to restyle the game. Tuned
@@ -8825,5 +9217,5 @@ Theme.corner = UDim.new(0, 12)
 Theme.pad = 10
 
 return Theme
-</ProtectedString></Properties></Item></Item></Item></Item></Item><Item class="Workspace" referent="RBX00000069"><Properties><bool name="StreamingEnabled">true</bool></Properties></Item><Item class="Players" referent="RBX00000070"><Properties><bool name="CharacterAutoLoads">false</bool></Properties></Item>
+</ProtectedString></Properties></Item></Item></Item></Item></Item><Item class="Workspace" referent="RBX00000071"><Properties><bool name="StreamingEnabled">true</bool></Properties></Item><Item class="Players" referent="RBX00000072"><Properties><bool name="CharacterAutoLoads">false</bool></Properties></Item>
 </roblox>
