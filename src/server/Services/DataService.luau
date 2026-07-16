@@ -87,9 +87,23 @@ DataService._store = nil :: StoreLike?
 DataService._backupStore = nil :: StoreLike?
 DataService._useMock = false
 
--- Migration steps: index N upgrades a vN profile to v(N+1) in place.
+-- Migration steps: index N upgrades a vN profile to v(N+1) in place. Reconcile
+-- also backfills missing fields, but explicit migrations document the change and
+-- let us transform (not just default) data when a shape genuinely changes.
 local MIGRATIONS: { [number]: (Profile) -> () } = {
-	-- [1] = function(profile) ... end,  -- add when schema bumps to v2
+	-- v1 -> v2: nations gained military, diplomacy and objectives.
+	[1] = function(profile)
+		local nation = profile.nation
+		if typeof(nation.military) ~= "table" then
+			nation.military = { army = 0, navy = 0, air = 0 }
+		end
+		if typeof(nation.diplomacy) ~= "table" then
+			nation.diplomacy = { allies = {} }
+		end
+		if typeof((nation :: any).objectives) ~= "table" then
+			(nation :: any).objectives = {}
+		end
+	end,
 }
 
 -- ---- Default profile ------------------------------------------------------
@@ -138,6 +152,7 @@ local function defaultNation(player: Player): Nation
 		military = { army = 0, navy = 0, air = 0 },
 		diplomacy = { allies = {} },
 		territory = { regions = { "capital" } },
+		objectives = {},
 		flags = {},
 	}
 end

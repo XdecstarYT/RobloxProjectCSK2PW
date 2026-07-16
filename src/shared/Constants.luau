@@ -9,7 +9,8 @@ local Constants = {}
 
 -- Schema version of the persisted profile. Bump this whenever the shape of
 -- Types.Profile changes, and add a matching migration in DataService.
-Constants.PROFILE_SCHEMA_VERSION = 1
+-- v2: added nation.military, nation.diplomacy, nation.objectives.
+Constants.PROFILE_SCHEMA_VERSION = 2
 
 -- DataStore names. Suffixing with an environment tag lets us keep test saves
 -- isolated from production ones.

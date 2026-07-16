@@ -99,6 +99,7 @@ export type Nation = {
 	military: Military,
 	diplomacy: Diplomacy,
 	territory: { regions: { string } },
+	objectives: { [string]: boolean }, -- completed milestone ids
 	flags: { [string]: boolean }, -- one-time event / tutorial markers
 }
 

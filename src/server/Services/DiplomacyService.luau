@@ -56,6 +56,7 @@ local RESOURCE_VALUE: { [string]: number } = {
 
 local OFFER_TTL = 120
 local MAX_TRADE_AMOUNT = 10_000_000
+local MAX_OUTGOING = 10 -- cap pending offers per proposer (anti-spam / escrow lock)
 
 local DiplomacyService = {
 	Name = "DiplomacyService",
@@ -168,6 +169,17 @@ function DiplomacyService:CreateOffer(
 	local toNation = WorldService:GetNationById(toId)
 	if not fromNation or not toNation then
 		return nil, "no_nation"
+	end
+
+	-- Cap how many offers one nation can have open at once.
+	local outgoing = 0
+	for _, existing in self._offers do
+		if existing.fromId == fromId then
+			outgoing += 1
+		end
+	end
+	if outgoing >= MAX_OUTGOING then
+		return nil, "too_many_offers"
 	end
 
 	if kind == "alliance" then

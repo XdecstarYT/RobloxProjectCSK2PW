@@ -3,7 +3,7 @@
 <Meta name="ExplicitAutoJoints">true</Meta>
 <External>null</External>
 <External>nil</External>
-<Item class="ReplicatedStorage" referent="RBX00000070"><Properties></Properties><Item class="Folder" referent="RBX00000021"><Properties><string name="Name">Nexus</string></Properties><Item class="ModuleScript" referent="RBX00000011"><Properties><string name="Name">Config</string><ProtectedString name="Source">--!strict
+<Item class="ReplicatedStorage" referent="RBX00000073"><Properties></Properties><Item class="Folder" referent="RBX00000022"><Properties><string name="Name">Nexus</string></Properties><Item class="ModuleScript" referent="RBX00000012"><Properties><string name="Name">Config</string><ProtectedString name="Source">--!strict
 --[[
 	Config/init.luau
 	Aggregates every configuration table behind one require. Because this folder
@@ -22,6 +22,7 @@ local Config = {
 	MilitaryUnits = require(script.MilitaryUnits),
 	ServerSettings = require(script.ServerSettings),
 	Market = require(script.Market),
+	Objectives = require(script.Objectives),
 }
 
 return Config
@@ -711,7 +712,116 @@ local MilitaryUnits: { [string]: UnitDef } = {
 }
 
 return MilitaryUnits
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000007"><Properties><string name="Name">Regions</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000007"><Properties><string name="Name">Objectives</string><ProtectedString name="Source">--!strict
+--[[
+	Config/Objectives.luau
+	Milestone objectives that give the game direction and reward progress. Each is
+	a pure predicate over a nation's state plus a one-time resource reward, so the
+	server can evaluate them cheaply on a loop and grant the reward the moment a
+	milestone is reached. Order defines display order.
+]]
+
+local Types = require(script.Parent.Parent.Types)
+
+type Nation = Types.Nation
+
+export type ObjectiveDef = {
+	id: string,
+	title: string,
+	desc: string,
+	reward: Types.ResourceBag,
+	check: (Nation) -&gt; boolean,
+}
+
+local function buildingCount(n: Nation): number
+	local c = 0
+	for _ in n.buildings do
+		c += 1
+	end
+	return c
+end
+
+local function techCount(n: Nation): number
+	local c = 0
+	for _, u in n.research.unlocked do
+		if u then
+			c += 1
+		end
+	end
+	return c
+end
+
+local function mapRegions(n: Nation): number
+	local c = 0
+	for _, r in n.territory.regions do
+		if r ~= "capital" then
+			c += 1
+		end
+	end
+	return c
+end
+
+local function allyCount(n: Nation): number
+	local c = 0
+	for _, a in n.diplomacy.allies do
+		if a then
+			c += 1
+		end
+	end
+	return c
+end
+
+local function units(n: Nation): number
+	return n.military.army + n.military.navy + n.military.air
+end
+
+local Objectives: { ObjectiveDef } = {
+	{ id = "first_steps", title = "First Steps", desc = "Construct your first 3 buildings.", reward = { money = 3000 }, check = function(n)
+		return buildingCount(n) &gt;= 3
+	end },
+	{ id = "growing_town", title = "Growing Town", desc = "Reach a population of 100.", reward = { money = 5000, influence = 10 }, check = function(n)
+		return n.population.total &gt;= 100
+	end },
+	{ id = "metropolis", title = "Metropolis", desc = "Reach a population of 500.", reward = { influence = 40 }, check = function(n)
+		return n.population.total &gt;= 500
+	end },
+	{ id = "productive", title = "Productive Nation", desc = "Reach a GDP of 5,000 per tick.", reward = { money = 8000 }, check = function(n)
+		return n.economy.gdp &gt;= 5000
+	end },
+	{ id = "treasury", title = "Full Coffers", desc = "Hold a treasury of 100,000.", reward = { influence = 30 }, check = function(n)
+		return n.resources.money &gt;= 100000
+	end },
+	{ id = "content", title = "Content Citizens", desc = "Reach 80% happiness.", reward = { influence = 25 }, check = function(n)
+		return n.population.happiness &gt;= 80
+	end },
+	{ id = "scholars", title = "Age of Science", desc = "Unlock 3 technologies.", reward = { research = 60 }, check = function(n)
+		return techCount(n) &gt;= 3
+	end },
+	{ id = "lawmaker", title = "Lawmaker", desc = "Enact 2 laws at once.", reward = { money = 4000 }, check = function(n)
+		local c = 0
+		for _, a in n.politics.activeLaws do
+			if a then
+				c += 1
+			end
+		end
+		return c &gt;= 2
+	end },
+	{ id = "first_land", title = "Expansion", desc = "Claim your first region.", reward = { influence = 25 }, check = function(n)
+		return mapRegions(n) &gt;= 1
+	end },
+	{ id = "empire", title = "Empire", desc = "Control 5 regions.", reward = { money = 15000 }, check = function(n)
+		return mapRegions(n) &gt;= 5
+	end },
+	{ id = "diplomat", title = "Diplomat", desc = "Form an alliance.", reward = { influence = 40 }, check = function(n)
+		return allyCount(n) &gt;= 1
+	end },
+	{ id = "defender", title = "Standing Army", desc = "Field 10 military units.", reward = { money = 6000 }, check = function(n)
+		return units(n) &gt;= 10
+	end },
+}
+
+return Objectives
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000008"><Properties><string name="Name">Regions</string><ProtectedString name="Source">--!strict
 --[[
 	Config/Regions.luau
 	The shared world map of claimable regions. Regions sit on a grid; two regions
@@ -756,7 +866,7 @@ define({ id = "aurora_steppe", displayName = "Aurora Steppe", col = 2, row = 2, 
 define({ id = "meridian_cape", displayName = "Meridian Cape", col = 3, row = 2, cost = 70, value = 5, bonus = { influence = 6 } })
 
 return Regions
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000008"><Properties><string name="Name">Resources</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000009"><Properties><string name="Name">Resources</string><ProtectedString name="Source">--!strict
 --[[
 	Config/Resources.luau
 	Display metadata for each resource. Simulation math lives elsewhere; this is
@@ -825,7 +935,7 @@ local Resources: { [string]: ResourceMeta } = {
 }
 
 return Resources
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000009"><Properties><string name="Name">ServerSettings</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000010"><Properties><string name="Name">ServerSettings</string><ProtectedString name="Source">--!strict
 --[[
 	Config/ServerSettings.luau
 	Server-wide toggles a place owner can flip before shipping. Read by both the
@@ -841,7 +951,7 @@ local ServerSettings = {
 }
 
 return ServerSettings
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000010"><Properties><string name="Name">Technologies</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000011"><Properties><string name="Name">Technologies</string><ProtectedString name="Source">--!strict
 --[[
 	Config/Technologies.luau
 	The research tree. Each tech gates buildings and/or applies named modifiers
@@ -1008,7 +1118,7 @@ define({
 })
 
 return Technologies
-</ProtectedString></Properties></Item></Item><Item class="ModuleScript" referent="RBX00000012"><Properties><string name="Name">Constants</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item><Item class="ModuleScript" referent="RBX00000013"><Properties><string name="Name">Constants</string><ProtectedString name="Source">--!strict
 --[[
 	Constants.luau
 	Immutable, project-wide constants. No gameplay balance numbers live here —
@@ -1019,7 +1129,8 @@ local Constants = {}
 
 -- Schema version of the persisted profile. Bump this whenever the shape of
 -- Types.Profile changes, and add a matching migration in DataService.
-Constants.PROFILE_SCHEMA_VERSION = 1
+-- v2: added nation.military, nation.diplomacy, nation.objectives.
+Constants.PROFILE_SCHEMA_VERSION = 2
 
 -- DataStore names. Suffixing with an environment tag lets us keep test saves
 -- isolated from production ones.
@@ -1052,7 +1163,7 @@ Constants.GDP_HISTORY_LENGTH = 60
 Constants.RESOURCE_ORDER = { "money", "materials", "energy", "food", "research", "influence" } :: { string }
 
 return Constants
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000013"><Properties><string name="Name">Logger</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000014"><Properties><string name="Name">Logger</string><ProtectedString name="Source">--!strict
 --[[
 	Logger.luau
 	Namespaced, level-filtered logging. Every subsystem creates its own logger
@@ -1130,7 +1241,7 @@ function Logger:Error(...: any)
 end
 
 return Logger
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000014"><Properties><string name="Name">Net</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000015"><Properties><string name="Name">Net</string><ProtectedString name="Source">--!strict
 --[[
 	Net.luau
 	The single, guarded gateway between client and server.
@@ -1386,7 +1497,7 @@ else
 end
 
 return Net
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000015"><Properties><string name="Name">NetRoutes</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000016"><Properties><string name="Name">NetRoutes</string><ProtectedString name="Source">--!strict
 --[[
 	NetRoutes.luau
 	The canonical list of network route names. Both sides import these constants
@@ -1434,7 +1545,7 @@ local NetRoutes = {
 }
 
 return NetRoutes
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000016"><Properties><string name="Name">ResourceMath</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000017"><Properties><string name="Name">ResourceMath</string><ProtectedString name="Source">--!strict
 --[[
 	ResourceMath.luau
 	Pure helpers for combining ResourceBags. The server uses these to mutate the
@@ -1505,7 +1616,7 @@ function ResourceMath.grant(wallet: ResourceBag, gain: ResourceBag)
 end
 
 return ResourceMath
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000017"><Properties><string name="Name">Signal</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000018"><Properties><string name="Name">Signal</string><ProtectedString name="Source">--!strict
 --[[
 	Signal.luau
 	A minimal, original event/observer primitive.
@@ -1607,7 +1718,7 @@ function Signal:Destroy()
 end
 
 return Signal
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000018"><Properties><string name="Name">TableUtil</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000019"><Properties><string name="Name">TableUtil</string><ProtectedString name="Source">--!strict
 --[[
 	TableUtil.luau
 	Small, dependency-free helpers used by the data and simulation layers.
@@ -1678,7 +1789,7 @@ function TableUtil.shallowEqual(a: { [any]: any }, b: { [any]: any }): boolean
 end
 
 return TableUtil
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000019"><Properties><string name="Name">Types</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000020"><Properties><string name="Name">Types</string><ProtectedString name="Source">--!strict
 --[[
 	Types.luau
 	Central typed-Luau definitions shared by server and client.
@@ -1779,6 +1890,7 @@ export type Nation = {
 	military: Military,
 	diplomacy: Diplomacy,
 	territory: { regions: { string } },
+	objectives: { [string]: boolean }, -- completed milestone ids
 	flags: { [string]: boolean }, -- one-time event / tutorial markers
 }
 
@@ -1832,7 +1944,7 @@ export type TechDef = {
 }
 
 return {}
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000020"><Properties><string name="Name">WorldGrid</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000021"><Properties><string name="Name">WorldGrid</string><ProtectedString name="Source">--!strict
 --[[
 	WorldGrid.luau
 	The mapping between the logical build grid (integer tiles the server stores)
@@ -1876,7 +1988,7 @@ function WorldGrid.worldToTile(position: Vector3): (number, number)
 end
 
 return WorldGrid
-</ProtectedString></Properties></Item></Item></Item><Item class="ServerScriptService" referent="RBX00000071"><Properties></Properties><Item class="Script" referent="RBX00000043"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item></Item><Item class="ServerScriptService" referent="RBX00000074"><Properties></Properties><Item class="Script" referent="RBX00000045"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
 --[[
 	init.server.luau
 	Server bootstrap. Requires every service, registers it with the Framework,
@@ -1908,6 +2020,7 @@ local ORDER = {
 	"TerritoryService",
 	"MilitaryService",
 	"MarketService",
+	"ObjectiveService",
 	"AIService",
 	"EventService",
 	"OnboardingService",
@@ -1922,7 +2035,7 @@ end
 Framework.start()
 
 print("[Nexus] server online — Project Nexus nation simulator")
-</ProtectedString></Properties><Item class="ModuleScript" referent="RBX00000022"><Properties><string name="Name">Framework</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties><Item class="ModuleScript" referent="RBX00000023"><Properties><string name="Name">Framework</string><ProtectedString name="Source">--!strict
 --[[
 	Framework.luau
 	A tiny service locator with a two-phase lifecycle.
@@ -2000,7 +2113,7 @@ function Framework.start()
 end
 
 return Framework
-</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000039"><Properties><string name="Name">Services</string></Properties><Item class="ModuleScript" referent="RBX00000023"><Properties><string name="Name">AIService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000041"><Properties><string name="Name">Services</string></Properties><Item class="ModuleScript" referent="RBX00000024"><Properties><string name="Name">AIService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/AIService.luau
 	Server-owned AI nations that share the exact same Nation shape as players, so
@@ -2285,7 +2398,7 @@ function AIService:Start()
 end
 
 return AIService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000024"><Properties><string name="Name">CitizenService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000025"><Properties><string name="Name">CitizenService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/CitizenService.luau
 	The populace as a living system. Each tick it moves education and health
@@ -2396,7 +2509,7 @@ function CitizenService:Init()
 end
 
 return CitizenService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000025"><Properties><string name="Name">CityService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000026"><Properties><string name="Name">CityService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/CityService.luau
 	The authoritative city builder. Owns every building a nation places and is
@@ -2800,7 +2913,7 @@ function CityService:Start()
 end
 
 return CityService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000026"><Properties><string name="Name">DataService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000027"><Properties><string name="Name">DataService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/DataService.luau
 	Original, session-safe persistence for player profiles.
@@ -2889,9 +3002,23 @@ DataService._store = nil :: StoreLike?
 DataService._backupStore = nil :: StoreLike?
 DataService._useMock = false
 
--- Migration steps: index N upgrades a vN profile to v(N+1) in place.
+-- Migration steps: index N upgrades a vN profile to v(N+1) in place. Reconcile
+-- also backfills missing fields, but explicit migrations document the change and
+-- let us transform (not just default) data when a shape genuinely changes.
 local MIGRATIONS: { [number]: (Profile) -&gt; () } = {
-	-- [1] = function(profile) ... end,  -- add when schema bumps to v2
+	-- v1 -&gt; v2: nations gained military, diplomacy and objectives.
+	[1] = function(profile)
+		local nation = profile.nation
+		if typeof(nation.military) ~= "table" then
+			nation.military = { army = 0, navy = 0, air = 0 }
+		end
+		if typeof(nation.diplomacy) ~= "table" then
+			nation.diplomacy = { allies = {} }
+		end
+		if typeof((nation :: any).objectives) ~= "table" then
+			(nation :: any).objectives = {}
+		end
+	end,
 }
 
 -- ---- Default profile ------------------------------------------------------
@@ -2940,6 +3067,7 @@ local function defaultNation(player: Player): Nation
 		military = { army = 0, navy = 0, air = 0 },
 		diplomacy = { allies = {} },
 		territory = { regions = { "capital" } },
+		objectives = {},
 		flags = {},
 	}
 end
@@ -3213,7 +3341,7 @@ function DataService:Start()
 end
 
 return DataService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000027"><Properties><string name="Name">DiplomacyService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000028"><Properties><string name="Name">DiplomacyService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/DiplomacyService.luau
 	Player-to-player (and player-to-AI) diplomacy: escrowed resource trades and
@@ -3271,6 +3399,7 @@ local RESOURCE_VALUE: { [string]: number } = {
 
 local OFFER_TTL = 120
 local MAX_TRADE_AMOUNT = 10_000_000
+local MAX_OUTGOING = 10 -- cap pending offers per proposer (anti-spam / escrow lock)
 
 local DiplomacyService = {
 	Name = "DiplomacyService",
@@ -3383,6 +3512,17 @@ function DiplomacyService:CreateOffer(
 	local toNation = WorldService:GetNationById(toId)
 	if not fromNation or not toNation then
 		return nil, "no_nation"
+	end
+
+	-- Cap how many offers one nation can have open at once.
+	local outgoing = 0
+	for _, existing in self._offers do
+		if existing.fromId == fromId then
+			outgoing += 1
+		end
+	end
+	if outgoing &gt;= MAX_OUTGOING then
+		return nil, "too_many_offers"
 	end
 
 	if kind == "alliance" then
@@ -3630,7 +3770,7 @@ function DiplomacyService:Start()
 end
 
 return DiplomacyService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000028"><Properties><string name="Name">EconomyService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000029"><Properties><string name="Name">EconomyService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/EconomyService.luau
 	The master simulation tick. Every ECONOMY_TICK it walks each live nation and,
@@ -3860,7 +4000,7 @@ function EconomyService:Start()
 end
 
 return EconomyService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000029"><Properties><string name="Name">EventService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000030"><Properties><string name="Name">EventService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/EventService.luau
 	Keeps the world unpredictable: periodic national events hit a random nation,
@@ -4043,7 +4183,7 @@ function EventService:Start()
 end
 
 return EventService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000030"><Properties><string name="Name">MarketService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000031"><Properties><string name="Name">MarketService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/MarketService.luau
 	A living global commodity market. Prices update every market tick from
@@ -4210,7 +4350,7 @@ function MarketService:Start()
 end
 
 return MarketService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000031"><Properties><string name="Name">MilitaryService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000032"><Properties><string name="Name">MilitaryService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/MilitaryService.luau
 	The optional military layer: recruit and disband units. Gated behind
@@ -4320,7 +4460,7 @@ function MilitaryService:Start()
 end
 
 return MilitaryService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000032"><Properties><string name="Name">NotificationService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000033"><Properties><string name="Name">NotificationService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/NotificationService.luau
 	Server-authored, transient messages to a player's HUD: "Not enough
@@ -4359,7 +4499,73 @@ function NotificationService:Broadcast(severity: Severity, title: string, body: 
 end
 
 return NotificationService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000033"><Properties><string name="Name">OnboardingService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000034"><Properties><string name="Name">ObjectiveService</string><ProtectedString name="Source">--!strict
+--[[
+	Services/ObjectiveService.luau
+	Evaluates milestone objectives for each player's nation and grants a one-time
+	reward the moment one is met. Objectives give the game direction; completion
+	is persisted in nation.objectives so it survives rejoins and never pays twice.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Logger = require(ReplicatedStorage.Nexus.Logger)
+local ResourceMath = require(ReplicatedStorage.Nexus.ResourceMath)
+local Objectives = require(ReplicatedStorage.Nexus.Config.Objectives)
+
+local DataService = require(script.Parent.DataService)
+local NotificationService = require(script.Parent.NotificationService)
+local ReplicationService = require(script.Parent.ReplicationService)
+
+local log = Logger.new("ObjectiveService")
+
+local ObjectiveService = {
+	Name = "ObjectiveService",
+}
+
+local function rewardText(reward): string
+	local parts = {}
+	for res, amount in reward do
+		table.insert(parts, ("+%d %s"):format(amount, res))
+	end
+	return table.concat(parts, ", ")
+end
+
+function ObjectiveService:Evaluate(player: Player, nation)
+	for _, obj in Objectives do
+		if not nation.objectives[obj.id] then
+			local ok, met = pcall(obj.check, nation)
+			if ok and met then
+				nation.objectives[obj.id] = true
+				ResourceMath.grant(nation.resources, obj.reward)
+				NotificationService:Send(
+					player,
+					"success",
+					"🎯 " .. obj.title,
+					obj.desc .. "  (" .. rewardText(obj.reward) .. ")"
+				)
+				ReplicationService:MarkDirty(player)
+			end
+		end
+	end
+end
+
+function ObjectiveService:Start()
+	task.spawn(function()
+		while true do
+			task.wait(5)
+			DataService:ForEachNation(function(player, nation)
+				pcall(function()
+					self:Evaluate(player, nation)
+				end)
+			end)
+		end
+	end)
+	log:Info("objective service ready")
+end
+
+return ObjectiveService
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000035"><Properties><string name="Name">OnboardingService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/OnboardingService.luau
 	Gently teaches a brand-new nation the ropes with a short, staggered sequence
@@ -4419,7 +4625,7 @@ function OnboardingService:Start()
 end
 
 return OnboardingService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000034"><Properties><string name="Name">PoliticsService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000036"><Properties><string name="Name">PoliticsService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/PoliticsService.luau
 	Government, laws and the public's verdict on your rule. Players set the tax
@@ -4654,7 +4860,7 @@ function PoliticsService:Start()
 end
 
 return PoliticsService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000035"><Properties><string name="Name">ReplicationService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000037"><Properties><string name="Name">ReplicationService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/ReplicationService.luau
 	The only place server state reaches a client. Services never call Net
@@ -4749,7 +4955,7 @@ function ReplicationService:Start()
 end
 
 return ReplicationService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000036"><Properties><string name="Name">ResearchService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000038"><Properties><string name="Name">ResearchService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/ResearchService.luau
 	Drives the technology tree. Research accumulates as the `research` resource
@@ -4861,7 +5067,7 @@ function ResearchService:Start()
 end
 
 return ResearchService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000037"><Properties><string name="Name">TerritoryService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000039"><Properties><string name="Name">TerritoryService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/TerritoryService.luau
 	Authoritative ownership of the shared world map. Nations spend influence to
@@ -5122,7 +5328,7 @@ function TerritoryService:Start()
 end
 
 return TerritoryService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000038"><Properties><string name="Name">WorldService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000040"><Properties><string name="Name">WorldService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/WorldService.luau
 	The registry that ties every nation — human or AI — into one world. It resolves
@@ -5266,7 +5472,7 @@ function WorldService:Start()
 end
 
 return WorldService
-</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000042"><Properties><string name="Name">Util</string></Properties><Item class="ModuleScript" referent="RBX00000040"><Properties><string name="Name">Modifiers</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000044"><Properties><string name="Name">Util</string></Properties><Item class="ModuleScript" referent="RBX00000042"><Properties><string name="Name">Modifiers</string><ProtectedString name="Source">--!strict
 --[[
 	Util/Modifiers.luau
 	Resolves a nation's active government, unlocked technologies, and enacted
@@ -5392,7 +5598,7 @@ function Modifiers.resolve(nation: Nation): Resolved
 end
 
 return Modifiers
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000041"><Properties><string name="Name">Validation</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000043"><Properties><string name="Name">Validation</string><ProtectedString name="Source">--!strict
 --[[
 	Util/Validation.luau
 	Server-side guards for untrusted client payloads. Every request handler runs
@@ -5441,7 +5647,7 @@ function Validation.readPosition(payload: any): ({ x: number, z: number })?
 end
 
 return Validation
-</ProtectedString></Properties></Item></Item></Item></Item><Item class="StarterPlayer" referent="RBX00000073"><Properties></Properties><Item class="StarterPlayerScripts" referent="RBX00000072"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX00000069"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item></Item></Item><Item class="StarterPlayer" referent="RBX00000076"><Properties></Properties><Item class="StarterPlayerScripts" referent="RBX00000075"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX00000072"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
 --[[
 	init.client.luau
 	Client bootstrap. Registers every controller with the ClientFramework, then
@@ -5474,6 +5680,7 @@ local ORDER = {
 	"TerritoryController",
 	"MilitaryController",
 	"MarketController",
+	"ObjectivesController",
 	"LeaderboardController",
 }
 
@@ -5486,7 +5693,7 @@ end
 ClientFramework.start()
 
 print("[Nexus] client online for " .. Players.LocalPlayer.Name)
-</ProtectedString></Properties><Item class="ModuleScript" referent="RBX00000044"><Properties><string name="Name">ClientFramework</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties><Item class="ModuleScript" referent="RBX00000046"><Properties><string name="Name">ClientFramework</string><ProtectedString name="Source">--!strict
 --[[
 	ClientFramework.luau
 	The client mirror of the server Framework: a controller registry with the
@@ -5551,7 +5758,7 @@ function ClientFramework.start()
 end
 
 return ClientFramework
-</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000060"><Properties><string name="Name">Controllers</string></Properties><Item class="ModuleScript" referent="RBX00000045"><Properties><string name="Name">AmbianceController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000063"><Properties><string name="Name">Controllers</string></Properties><Item class="ModuleScript" referent="RBX00000047"><Properties><string name="Name">AmbianceController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/AmbianceController.luau
 	Sets the mood: cinematic lighting, atmospheric depth and post-processing.
@@ -5630,7 +5837,7 @@ function AmbianceController:Init()
 end
 
 return AmbianceController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000046"><Properties><string name="Name">BuildController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000048"><Properties><string name="Name">BuildController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/BuildController.luau
 	Everything the player touches to shape their city:
@@ -6366,7 +6573,7 @@ function BuildController:Start()
 end
 
 return BuildController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000047"><Properties><string name="Name">DiplomacyController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000049"><Properties><string name="Name">DiplomacyController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/DiplomacyController.luau
 	The diplomacy screen: pick another nation, compose a resource-for-resource
@@ -6832,7 +7039,7 @@ function DiplomacyController:Start()
 end
 
 return DiplomacyController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000048"><Properties><string name="Name">EconomyController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000050"><Properties><string name="Name">EconomyController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/EconomyController.luau
 	A statistics dashboard: a live GDP graph (from the replicated gdpHistory), a
@@ -7142,7 +7349,7 @@ function EconomyController:Start()
 end
 
 return EconomyController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000049"><Properties><string name="Name">HudController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000051"><Properties><string name="Name">HudController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/HudController.luau
 	The persistent HUD: a top resource bar, a compact national-stats panel, and a
@@ -7468,7 +7675,7 @@ function HudController:Start()
 end
 
 return HudController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000050"><Properties><string name="Name">LeaderboardController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000052"><Properties><string name="Name">LeaderboardController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/LeaderboardController.luau
 	A ranked table of every nation in the world (players and AI) by power score.
@@ -7622,7 +7829,7 @@ function LeaderboardController:Start()
 end
 
 return LeaderboardController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000051"><Properties><string name="Name">MarketController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000053"><Properties><string name="Name">MarketController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/MarketController.luau
 	The global commodity market screen: live prices with trend arrows and
@@ -7854,7 +8061,7 @@ function MarketController:Start()
 end
 
 return MarketController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000052"><Properties><string name="Name">MilitaryController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000054"><Properties><string name="Name">MilitaryController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/MilitaryController.luau
 	The (optional) armed-forces panel: recruit and disband army, navy and air
@@ -8078,7 +8285,7 @@ function MilitaryController:Start()
 end
 
 return MilitaryController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000053"><Properties><string name="Name">NotificationController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000055"><Properties><string name="Name">NotificationController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/NotificationController.luau
 	Renders transient server notifications as stacked toasts in the top-right.
@@ -8214,7 +8421,199 @@ function NotificationController:Start()
 end
 
 return NotificationController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000054"><Properties><string name="Name">PoliticsController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000056"><Properties><string name="Name">ObjectivesController</string><ProtectedString name="Source">--!strict
+--[[
+	Controllers/ObjectivesController.luau
+	The goals screen: every milestone with its reward and a done/to-do state,
+	plus an overall completion count. Reads the replicated nation.objectives set.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Objectives = require(ReplicatedStorage.Nexus.Config.Objectives)
+
+local Create = require(script.Parent.Parent.UI.Create)
+local Decor = require(script.Parent.Parent.UI.Decor)
+local Motion = require(script.Parent.Parent.UI.Motion)
+local Theme = require(script.Parent.Parent.UI.Theme)
+
+local ObjectivesController = {
+	Name = "ObjectivesController",
+}
+
+ObjectivesController._panel = nil :: Frame?
+ObjectivesController._rows = {} :: { [string]: any }
+ObjectivesController._header = nil :: TextLabel?
+
+local function rewardText(reward): string
+	local parts = {}
+	for res, amount in reward do
+		table.insert(parts, ("+%d %s"):format(amount, res))
+	end
+	return table.concat(parts, ", ")
+end
+
+function ObjectivesController:_build()
+	local HudController = require(script.Parent.HudController)
+	local gui = HudController:GetGui()
+
+	local list = Create("ScrollingFrame", {
+		Position = UDim2.fromOffset(10, 66),
+		Size = UDim2.new(1, -20, 1, -76),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 4,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		[Create.Children] = {
+			Create("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }),
+		},
+	}) :: ScrollingFrame
+
+	for i, obj in Objectives do
+		local check = Create("TextLabel", {
+			Name = "Check",
+			BackgroundTransparency = 1,
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = UDim2.new(1, -10, 0.5, 0),
+			Size = UDim2.fromOffset(28, 48),
+			Font = Theme.font.black,
+			Text = "○",
+			TextColor3 = Theme.color.textDim,
+			TextSize = 20,
+		}) :: TextLabel
+
+		local row = Create("Frame", {
+			Name = obj.id,
+			LayoutOrder = i,
+			BackgroundColor3 = Theme.color.panelLight,
+			Size = UDim2.new(1, 0, 0, 56),
+			[Create.Children] = {
+				Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+				Create("TextLabel", {
+					BackgroundTransparency = 1,
+					Position = UDim2.fromOffset(12, 6),
+					Size = UDim2.new(1, -50, 0, 18),
+					Font = Theme.font.bold,
+					Text = obj.title,
+					TextColor3 = Theme.color.text,
+					TextSize = 14,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}),
+				Create("TextLabel", {
+					BackgroundTransparency = 1,
+					Position = UDim2.fromOffset(12, 24),
+					Size = UDim2.new(1, -50, 0, 16),
+					Font = Theme.font.regular,
+					Text = obj.desc,
+					TextColor3 = Theme.color.textDim,
+					TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+				}),
+				Create("TextLabel", {
+					BackgroundTransparency = 1,
+					Position = UDim2.fromOffset(12, 40),
+					Size = UDim2.new(1, -50, 0, 14),
+					Font = Theme.font.medium,
+					Text = rewardText(obj.reward),
+					TextColor3 = Theme.color.accent2,
+					TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}),
+				check,
+			},
+		}) :: Frame
+		row.Parent = list
+		self._rows[obj.id] = { row = row, check = check }
+	end
+
+	self._header = Create("TextLabel", {
+		BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(14, 40),
+		Size = UDim2.new(1, -28, 0, 20),
+		Font = Theme.font.medium,
+		Text = "0 / " .. #Objectives .. " complete",
+		TextColor3 = Theme.color.textDim,
+		TextSize = 12,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}) :: TextLabel
+
+	local panel = Create("Frame", {
+		Name = "ObjectivesPanel",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(360, 460),
+		BackgroundColor3 = Theme.color.panel,
+		Visible = false,
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = Theme.corner }),
+			Create("UIStroke", { Color = Theme.color.stroke, Thickness = 1 }),
+			Create("TextLabel", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(14, 10),
+				Size = UDim2.new(1, -28, 0, 22),
+				Font = Theme.font.bold,
+				Text = "🎯 Objectives",
+				TextColor3 = Theme.color.text,
+				TextSize = 17,
+				TextXAlignment = Enum.TextXAlignment.Left,
+			}),
+			self._header,
+			list,
+		},
+	}) :: Frame
+	Decor.gradient(panel, Theme.gradient.panel)
+	panel.Parent = gui
+	self._panel = panel
+end
+
+function ObjectivesController:_refresh()
+	local StateController = require(script.Parent.StateController)
+	local nation = StateController:GetNation()
+	if not nation then
+		return
+	end
+	local done = 0
+	for id, ref in self._rows do
+		local complete = nation.objectives and nation.objectives[id] == true
+		if complete then
+			done += 1
+			ref.check.Text = "✓"
+			ref.check.TextColor3 = Theme.color.good
+			ref.row.BackgroundColor3 = Color3.fromRGB(30, 48, 36)
+		else
+			ref.check.Text = "○"
+			ref.check.TextColor3 = Theme.color.textDim
+			ref.row.BackgroundColor3 = Theme.color.panelLight
+		end
+	end
+	if self._header then
+		self._header.Text = ("%d / %d complete"):format(done, #Objectives)
+	end
+end
+
+function ObjectivesController:Start()
+	local HudController = require(script.Parent.HudController)
+	local StateController = require(script.Parent.StateController)
+
+	self:_build()
+	HudController:AddButton("🎯 Goals", function()
+		if self._panel then
+			Motion.toggle(self._panel)
+		end
+	end)
+
+	StateController.Changed:Connect(function()
+		self:_refresh()
+	end)
+	if StateController:IsReady() then
+		self:_refresh()
+	end
+end
+
+return ObjectivesController
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000057"><Properties><string name="Name">PoliticsController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/PoliticsController.luau
 	The governance panel: adjust the tax rate, switch government type, and
@@ -8495,7 +8894,7 @@ function PoliticsController:Start()
 end
 
 return PoliticsController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000055"><Properties><string name="Name">ResearchController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000058"><Properties><string name="Name">ResearchController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/ResearchController.luau
 	The technology panel. Lists every tech grouped by branch with a live status —
@@ -8740,7 +9139,7 @@ function ResearchController:Start()
 end
 
 return ResearchController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000056"><Properties><string name="Name">StateController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000059"><Properties><string name="Name">StateController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/StateController.luau
 	The client's single source of truth for replicated nation state. It listens
@@ -8800,7 +9199,7 @@ function StateController:Init()
 end
 
 return StateController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000057"><Properties><string name="Name">TerritoryController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000060"><Properties><string name="Name">TerritoryController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/TerritoryController.luau
 	The world map: a grid of claimable regions laid out from the Regions config
@@ -9031,7 +9430,7 @@ function TerritoryController:Start()
 end
 
 return TerritoryController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000058"><Properties><string name="Name">WorldController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000061"><Properties><string name="Name">WorldController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/WorldController.luau
 	Builds the 3D city view: a stylized ground with a glowing district grid,
@@ -9656,7 +10055,7 @@ function WorldController:Start()
 end
 
 return WorldController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000059"><Properties><string name="Name">WorldStateController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000062"><Properties><string name="Name">WorldStateController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/WorldStateController.luau
 	Client store for world-scope data that isn't part of the player's own nation:
@@ -9718,7 +10117,7 @@ function WorldStateController:Init()
 end
 
 return WorldStateController
-</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000068"><Properties><string name="Name">UI</string></Properties><Item class="Folder" referent="RBX00000061"><Properties><string name="Name">Components</string></Properties></Item><Item class="ModuleScript" referent="RBX00000062"><Properties><string name="Name">Create</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000071"><Properties><string name="Name">UI</string></Properties><Item class="Folder" referent="RBX00000064"><Properties><string name="Name">Components</string></Properties></Item><Item class="ModuleScript" referent="RBX00000065"><Properties><string name="Name">Create</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Create.luau
 	A tiny declarative helper for building Instance trees without the noise of
@@ -9778,7 +10177,7 @@ local callable = setmetatable(Create, {
 
 -- The `any` cast lets callers use both `Create("Frame")` and `Create.Children`.
 return (callable :: any) :: (((className: string, props: { [any]: any }?) -&gt; Instance) &amp; typeof(Create))
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000063"><Properties><string name="Name">Decor</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000066"><Properties><string name="Name">Decor</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Decor.luau
 	Small cosmetic helpers so every panel, chip and button gets the same finish
@@ -9846,7 +10245,7 @@ function Decor.shadow(frame: GuiObject): Frame
 end
 
 return Decor
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000064"><Properties><string name="Name">Format</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000067"><Properties><string name="Name">Format</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Format.luau
 	Number/text formatting shared by every panel, so "12.3k" and "+4.5%" look the
@@ -9884,7 +10283,7 @@ function Format.round(n: number): string
 end
 
 return Format
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000065"><Properties><string name="Name">Graph</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000068"><Properties><string name="Name">Graph</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Graph.luau
 	A tiny, asset-free bar graph. Given a container size it returns the frame plus
@@ -9965,7 +10364,7 @@ function Graph.new(size: UDim2): (Frame, (values: { number }, color: Color3?) -&
 end
 
 return Graph
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000066"><Properties><string name="Name">Motion</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000069"><Properties><string name="Name">Motion</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Motion.luau
 	Tiny animation helpers so panels don't just snap on/off. Uses a UIScale child
@@ -10013,7 +10412,7 @@ function Motion.toggle(frame: GuiObject)
 end
 
 return Motion
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000067"><Properties><string name="Name">Theme</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000070"><Properties><string name="Name">Theme</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Theme.luau
 	Design tokens for the whole interface. One place to restyle the game. Tuned
@@ -10065,5 +10464,5 @@ Theme.corner = UDim.new(0, 12)
 Theme.pad = 10
 
 return Theme
-</ProtectedString></Properties></Item></Item></Item></Item></Item><Item class="Workspace" referent="RBX00000074"><Properties><bool name="StreamingEnabled">true</bool></Properties></Item><Item class="Players" referent="RBX00000075"><Properties><bool name="CharacterAutoLoads">false</bool></Properties></Item>
+</ProtectedString></Properties></Item></Item></Item></Item></Item><Item class="Workspace" referent="RBX00000077"><Properties><bool name="StreamingEnabled">true</bool></Properties></Item><Item class="Players" referent="RBX00000078"><Properties><bool name="CharacterAutoLoads">false</bool></Properties></Item>
 </roblox>
