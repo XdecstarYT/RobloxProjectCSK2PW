@@ -98,6 +98,12 @@ function TerritoryController:_build()
 				}),
 			},
 			[Create.Event] = { Activated = function()
+				-- Cinematic travel to the region, then attempt to claim/expand.
+				local WorldController = require(script.Parent.WorldController)
+				WorldController:FlyToRegion(regionId)
+				if self._panel then
+					Motion.hide(self._panel)
+				end
 				task.spawn(function()
 					Net.request(NetRoutes.CLAIM_REGION, { regionId = regionId })
 				end)
@@ -120,12 +126,30 @@ function TerritoryController:_build()
 			Create("TextLabel", {
 				BackgroundTransparency = 1,
 				Position = UDim2.fromOffset(14, 10),
-				Size = UDim2.new(1, -28, 0, 24),
+				Size = UDim2.new(1, -140, 0, 24),
 				Font = Theme.font.bold,
-				Text = "🗺 World Map — claim regions with influence",
+				Text = "🗺 World Map",
 				TextColor3 = Theme.color.text,
-				TextSize = 14,
+				TextSize = 15,
 				TextXAlignment = Enum.TextXAlignment.Left,
+			}),
+			Create("TextButton", {
+				AnchorPoint = Vector2.new(1, 0),
+				Position = UDim2.new(1, -12, 0, 8),
+				Size = UDim2.fromOffset(112, 28),
+				BackgroundColor3 = Theme.color.accentDim,
+				Font = Theme.font.bold,
+				Text = "🏙 Capital",
+				TextColor3 = Theme.color.text,
+				TextSize = 13,
+				[Create.Children] = { Create("UICorner", { CornerRadius = UDim.new(0, 8) }) },
+				[Create.Event] = { Activated = function()
+					local WorldController = require(script.Parent.WorldController)
+					WorldController:FlyToCapital()
+					if self._panel then
+						Motion.hide(self._panel)
+					end
+				end },
 			}),
 			board,
 		},

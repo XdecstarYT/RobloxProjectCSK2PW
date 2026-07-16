@@ -17,10 +17,18 @@ local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
+local Players = game:GetService("Players")
+
 local Buildings = require(ReplicatedStorage.Nexus.Config.Buildings)
+local Regions = require(ReplicatedStorage.Nexus.Config.Regions)
+local Resources = require(ReplicatedStorage.Nexus.Config.Resources)
 local WorldGrid = require(ReplicatedStorage.Nexus.WorldGrid)
 
 local Theme = require(script.Parent.Parent.UI.Theme)
+
+-- How far apart region zones sit in the world, and how far the camera may roam.
+local REGION_SPACING = 820
+local WORLD_RADIUS = 1500
 
 -- Per-category look: body colour/material, roof colour, and a neon accent.
 type Style = { body: Color3, material: Enum.Material, roof: Color3, accent: Color3 }
@@ -44,11 +52,27 @@ local WorldController = {
 WorldController._parts = {} :: { [string]: Model }
 WorldController._cityFolder = nil :: Folder?
 WorldController._baseplate = nil :: BasePart?
+WorldController._regionPads = {} :: { [string]: any }
 
 -- Camera state.
 WorldController._focus = Vector3.new(0, 0, 0)
 WorldController._distance = 190
 WorldController._pitch = math.rad(56)
+WorldController._flying = false
+WorldController._flyToken = 0
+
+-- World-space centre of a region zone, spread out around the central city.
+local function regionWorldPos(def: any): Vector3
+	return Vector3.new((def.col - 1.5) * REGION_SPACING, 0, (def.row - 1) * REGION_SPACING)
+end
+
+local function bonusText(bonus: any): string
+	local parts = {}
+	for id, amount in bonus do
+		table.insert(parts, Resources[id].symbol .. tostring(amount))
+	end
+	return table.concat(parts, "  ")
+end
 
 function WorldController:GetCityFolder(): Folder
 	return assert(self._cityFolder, "city folder not ready")
@@ -77,9 +101,9 @@ local function makeAnchored(name: string): Part
 end
 
 function WorldController:_buildWorld()
-	-- Surrounding water for context and reflection.
+	-- Surrounding water for context and reflection (spans out under the regions).
 	local ocean = makeAnchored("NexusOcean")
-	ocean.Size = Vector3.new(WorldGrid.SPAN * 5, 4, WorldGrid.SPAN * 5)
+	ocean.Size = Vector3.new(WorldGrid.SPAN * 9, 4, WorldGrid.SPAN * 9)
 	ocean.Position = Vector3.new(0, -3.2, 0)
 	ocean.Material = Enum.Material.Water
 	ocean.Color = Color3.fromRGB(30, 58, 92)
@@ -143,6 +167,93 @@ function WorldController:_buildWorld()
 	folder.Name = "NexusCity"
 	folder.Parent = Workspace
 	self._cityFolder = folder
+
+	self:_buildRegionZones()
+end
+
+-- Physical region zones you can travel to, arranged around the capital.
+function WorldController:_buildRegionZones()
+	local zones = Instance.new("Folder")
+	zones.Name = "NexusRegions"
+	zones.Parent = Workspace
+
+	for regionId, def in Regions do
+		local center = regionWorldPos(def)
+
+		local pad = makeAnchored("Region_" .. regionId)
+		pad.Size = Vector3.new(300, 8, 300)
+		pad.Position = center + Vector3.new(0, -4, 0)
+		pad.Material = Enum.Material.SmoothPlastic
+		pad.Color = Theme.color.panelLight
+		pad.CanQuery = false
+		pad.Parent = zones
+
+		local box = Instance.new("SelectionBox")
+		box.Adornee = pad
+		box.LineThickness = 0.4
+		box.Color3 = Theme.color.stroke
+		box.SurfaceTransparency = 0.85
+		box.Parent = pad
+
+		-- Floating label so the region reads clearly from the overhead camera.
+		local billboard = Instance.new("BillboardGui")
+		billboard.Name = "Label"
+		billboard.Size = UDim2.fromOffset(220, 96)
+		billboard.StudsOffsetWorldSpace = Vector3.new(0, 26, 0)
+		billboard.AlwaysOnTop = true
+		billboard.MaxDistance = 4000
+		billboard.Adornee = pad
+		billboard.Parent = pad
+
+		local card = Instance.new("Frame")
+		card.Size = UDim2.fromScale(1, 1)
+		card.BackgroundColor3 = Theme.color.panel
+		card.BackgroundTransparency = 0.1
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 8)
+		corner.Parent = card
+		local stroke = Instance.new("UIStroke")
+		stroke.Color = Theme.color.stroke
+		stroke.Thickness = 1.5
+		stroke.Parent = card
+		card.Parent = billboard
+
+		local nameLabel = Instance.new("TextLabel")
+		nameLabel.BackgroundTransparency = 1
+		nameLabel.Position = UDim2.fromOffset(8, 6)
+		nameLabel.Size = UDim2.new(1, -16, 0, 24)
+		nameLabel.Font = Theme.font.bold
+		nameLabel.Text = def.displayName
+		nameLabel.TextColor3 = Theme.color.text
+		nameLabel.TextScaled = true
+		nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+		nameLabel.Parent = card
+
+		local bonusLabel = Instance.new("TextLabel")
+		bonusLabel.BackgroundTransparency = 1
+		bonusLabel.Position = UDim2.fromOffset(8, 34)
+		bonusLabel.Size = UDim2.new(1, -16, 0, 22)
+		bonusLabel.Font = Theme.font.medium
+		bonusLabel.Text = bonusText(def.bonus)
+		bonusLabel.TextColor3 = Theme.color.good
+		bonusLabel.TextScaled = true
+		bonusLabel.TextXAlignment = Enum.TextXAlignment.Left
+		bonusLabel.Parent = card
+
+		local ownerLabel = Instance.new("TextLabel")
+		ownerLabel.Name = "Owner"
+		ownerLabel.BackgroundTransparency = 1
+		ownerLabel.Position = UDim2.fromOffset(8, 60)
+		ownerLabel.Size = UDim2.new(1, -16, 0, 28)
+		ownerLabel.Font = Theme.font.regular
+		ownerLabel.Text = "Unclaimed"
+		ownerLabel.TextColor3 = Theme.color.textDim
+		ownerLabel.TextScaled = true
+		ownerLabel.TextXAlignment = Enum.TextXAlignment.Left
+		ownerLabel.Parent = card
+
+		self._regionPads[regionId] = { pad = pad, box = box, owner = ownerLabel }
+	end
 end
 
 -- ---- Camera ---------------------------------------------------------------
@@ -165,7 +276,7 @@ function WorldController:_setupCamera()
 	end
 
 	UserInputService.InputBegan:Connect(function(input, gameProcessed)
-		if gameProcessed then
+		if gameProcessed or self._flying then
 			return
 		end
 		if input.UserInputType == Enum.UserInputType.MouseButton2
@@ -186,6 +297,9 @@ function WorldController:_setupCamera()
 	end)
 
 	UserInputService.InputChanged:Connect(function(input, gameProcessed)
+		if self._flying then
+			return -- manual control is frozen during a cinematic fly
+		end
 		if input.UserInputType == Enum.UserInputType.MouseWheel then
 			self._distance = math.clamp(self._distance - input.Position.Z * 18, 60, 420)
 		elseif dragging and lastPos and
@@ -204,30 +318,80 @@ function WorldController:_setupCamera()
 	end)
 
 	RunService:BindToRenderStep("NexusCamera", Enum.RenderPriority.Camera.Value, function()
-		local move = Vector3.zero
-		if UserInputService:IsKeyDown(Enum.KeyCode.W) then
-			move += Vector3.new(0, 0, -1)
+		if not self._flying then
+			local move = Vector3.zero
+			if UserInputService:IsKeyDown(Enum.KeyCode.W) then
+				move += Vector3.new(0, 0, -1)
+			end
+			if UserInputService:IsKeyDown(Enum.KeyCode.S) then
+				move += Vector3.new(0, 0, 1)
+			end
+			if UserInputService:IsKeyDown(Enum.KeyCode.A) then
+				move += Vector3.new(-1, 0, 0)
+			end
+			if UserInputService:IsKeyDown(Enum.KeyCode.D) then
+				move += Vector3.new(1, 0, 0)
+			end
+			if move.Magnitude > 0 then
+				self._focus += move.Unit * (self._distance * 0.02)
+			end
+			self._focus = Vector3.new(
+				math.clamp(self._focus.X, -WORLD_RADIUS, WORLD_RADIUS),
+				0,
+				math.clamp(self._focus.Z, -WORLD_RADIUS, WORLD_RADIUS)
+			)
 		end
-		if UserInputService:IsKeyDown(Enum.KeyCode.S) then
-			move += Vector3.new(0, 0, 1)
-		end
-		if UserInputService:IsKeyDown(Enum.KeyCode.A) then
-			move += Vector3.new(-1, 0, 0)
-		end
-		if UserInputService:IsKeyDown(Enum.KeyCode.D) then
-			move += Vector3.new(1, 0, 0)
-		end
-		if move.Magnitude > 0 then
-			self._focus += move.Unit * (self._distance * 0.02)
-		end
-		local lim = WorldGrid.SPAN / 2
-		self._focus = Vector3.new(
-			math.clamp(self._focus.X, -lim, lim),
-			0,
-			math.clamp(self._focus.Z, -lim, lim)
-		)
 		updateCamera()
 	end)
+end
+
+-- ---- Cinematic camera -----------------------------------------------------
+
+--- GTA-style move: zoom out, glide to the target, zoom back in. Manual control
+--- is frozen for the duration. Re-calling interrupts the previous fly cleanly.
+function WorldController:FlyTo(targetFocus: Vector3, targetDistance: number, duration: number?)
+	duration = duration or 1.5
+	local startFocus = self._focus
+	local startDist = self._distance
+	local travel = (targetFocus - startFocus).Magnitude
+	-- Bigger journeys pull the camera further out at the midpoint.
+	local arc = math.clamp(travel * 0.4, 30, 900)
+
+	self._flyToken += 1
+	local token = self._flyToken
+	self._flying = true
+
+	task.spawn(function()
+		local t0 = os.clock()
+		while self._flyToken == token do
+			local raw = (os.clock() - t0) / (duration :: number)
+			if raw >= 1 then
+				break
+			end
+			local e = raw * raw * (3 - 2 * raw) -- smoothstep ease in/out
+			self._focus = startFocus:Lerp(targetFocus, e)
+			self._distance = startDist + (targetDistance - startDist) * e + arc * math.sin(math.pi * raw)
+			RunService.RenderStepped:Wait()
+		end
+		if self._flyToken == token then
+			self._focus = targetFocus
+			self._distance = targetDistance
+			self._flying = false
+		end
+	end)
+end
+
+--- Fly to a region zone by id.
+function WorldController:FlyToRegion(regionId: string)
+	local def = Regions[regionId]
+	if def then
+		self:FlyTo(regionWorldPos(def), 150)
+	end
+end
+
+--- Fly back to the capital city.
+function WorldController:FlyToCapital()
+	self:FlyTo(Vector3.new(0, 0, 0), 190)
 end
 
 -- ---- Building rendering ----------------------------------------------------
@@ -367,6 +531,44 @@ function WorldController:_syncBuildings(nation: any)
 	end
 end
 
+-- Recolour region zones to match ownership (you / ally / AI / rival / unclaimed).
+function WorldController:_updateRegionPads(map: { any }?)
+	local StateController = require(script.Parent.StateController)
+	local WorldStateController = require(script.Parent.WorldStateController)
+	map = map or WorldStateController:GetTerritory()
+	local myId = Players.LocalPlayer.UserId
+	local nation = StateController:GetNation()
+	local allies = nation and nation.diplomacy and nation.diplomacy.allies or {}
+
+	local byId: { [string]: any } = {}
+	for _, entry in map :: { any } do
+		byId[entry.id] = entry
+	end
+
+	for regionId, refs in self._regionPads do
+		local entry = byId[regionId]
+		local color, tag
+		if entry and entry.ownerId then
+			local ownerId = entry.ownerId
+			if ownerId == myId then
+				color, tag = Theme.color.accent, "Your territory"
+			elseif allies[tostring(ownerId)] then
+				color, tag = Theme.color.good, "Ally: " .. (entry.ownerName or "?")
+			elseif ownerId < 0 then
+				color, tag = Theme.color.warn, entry.ownerName or "AI"
+			else
+				color, tag = Color3.fromRGB(170, 130, 230), entry.ownerName or "Rival"
+			end
+		else
+			color, tag = Theme.color.stroke, "Unclaimed"
+		end
+		refs.pad.Color = color:Lerp(Theme.color.bg, 0.6)
+		refs.box.Color3 = color
+		refs.owner.Text = tag
+		refs.owner.TextColor3 = color
+	end
+end
+
 function WorldController:Init()
 	self:_buildWorld()
 	self:_setupCamera()
@@ -374,12 +576,19 @@ end
 
 function WorldController:Start()
 	local StateController = require(script.Parent.StateController)
+	local WorldStateController = require(script.Parent.WorldStateController)
+
 	StateController.Changed:Connect(function(snapshot)
 		self:_syncBuildings(snapshot.nation)
+		self:_updateRegionPads(nil)
+	end)
+	WorldStateController.TerritoryChanged:Connect(function(map)
+		self:_updateRegionPads(map)
 	end)
 	if StateController:IsReady() then
 		self:_syncBuildings(StateController:GetSnapshot().nation)
 	end
+	self:_updateRegionPads(nil)
 end
 
 return WorldController
