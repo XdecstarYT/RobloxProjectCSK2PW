@@ -18,6 +18,7 @@ local Controllers = script.Controllers
 
 local ORDER = {
 	"StateController",
+	"WorldStateController",
 	"AmbianceController",
 	"NotificationController",
 	"HudController",
@@ -25,6 +26,8 @@ local ORDER = {
 	"BuildController",
 	"PoliticsController",
 	"ResearchController",
+	"DiplomacyController",
+	"LeaderboardController",
 }
 
 for _, name in ORDER do

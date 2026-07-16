@@ -17,13 +17,26 @@ local NetRoutes = {
 	TOGGLE_LAW = "politics/toggleLaw",
 	START_RESEARCH = "research/start",
 	RENAME_NATION = "nation/rename",
+
+	-- Diplomacy.
 	PROPOSE_TRADE = "diplomacy/propose",
 	RESPOND_TRADE = "diplomacy/respond",
+	CANCEL_TRADE = "diplomacy/cancel",
+	PROPOSE_ALLIANCE = "diplomacy/ally",
+	BREAK_ALLIANCE = "diplomacy/breakAlly",
+
+	-- Territory.
+	CLAIM_REGION = "territory/claim",
+
+	-- Military.
+	RECRUIT_UNITS = "military/recruit",
+	DISBAND_UNITS = "military/disband",
 
 	-- Server -> client pushes.
 	STATE_SYNC = "state/sync",
 	NOTIFY = "state/notify",
 	TRADE_INBOX = "diplomacy/inbox",
+	WORLD_SYNC = "world/sync",
 }
 
 return NetRoutes

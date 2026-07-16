@@ -3,7 +3,7 @@
 <Meta name="ExplicitAutoJoints">true</Meta>
 <External>null</External>
 <External>nil</External>
-<Item class="ReplicatedStorage" referent="RBX00000050"><Properties></Properties><Item class="Folder" referent="RBX00000017"><Properties><string name="Name">Nexus</string></Properties><Item class="ModuleScript" referent="RBX00000007"><Properties><string name="Name">Config</string><ProtectedString name="Source">--!strict
+<Item class="ReplicatedStorage" referent="RBX00000056"><Properties></Properties><Item class="Folder" referent="RBX00000017"><Properties><string name="Name">Nexus</string></Properties><Item class="ModuleScript" referent="RBX00000007"><Properties><string name="Name">Config</string><ProtectedString name="Source">--!strict
 --[[
 	Config/init.luau
 	Aggregates every configuration table behind one require. Because this folder
@@ -1227,13 +1227,26 @@ local NetRoutes = {
 	TOGGLE_LAW = "politics/toggleLaw",
 	START_RESEARCH = "research/start",
 	RENAME_NATION = "nation/rename",
+
+	-- Diplomacy.
 	PROPOSE_TRADE = "diplomacy/propose",
 	RESPOND_TRADE = "diplomacy/respond",
+	CANCEL_TRADE = "diplomacy/cancel",
+	PROPOSE_ALLIANCE = "diplomacy/ally",
+	BREAK_ALLIANCE = "diplomacy/breakAlly",
+
+	-- Territory.
+	CLAIM_REGION = "territory/claim",
+
+	-- Military.
+	RECRUIT_UNITS = "military/recruit",
+	DISBAND_UNITS = "military/disband",
 
 	-- Server -&gt; client pushes.
 	STATE_SYNC = "state/sync",
 	NOTIFY = "state/notify",
 	TRADE_INBOX = "diplomacy/inbox",
+	WORLD_SYNC = "world/sync",
 }
 
 return NetRoutes
@@ -1555,6 +1568,18 @@ export type Research = {
 	points: number, -- unspent research points
 }
 
+-- Standing armed forces. Unit counts; strength is derived from them + tech.
+export type Military = {
+	army: number,
+	navy: number,
+	air: number,
+}
+
+-- Foreign relations. `allies` maps another nation's id (as a string) to true.
+export type Diplomacy = {
+	allies: { [string]: boolean },
+}
+
 -- The full authoritative state for a single nation. This is what the server
 -- simulates, saves, and (in a filtered form) replicates to the owning client.
 export type Nation = {
@@ -1567,6 +1592,8 @@ export type Nation = {
 	politics: Politics,
 	economy: Economy,
 	research: Research,
+	military: Military,
+	diplomacy: Diplomacy,
 	territory: { regions: { string } },
 	flags: { [string]: boolean }, -- one-time event / tutorial markers
 }
@@ -1665,7 +1692,7 @@ function WorldGrid.worldToTile(position: Vector3): (number, number)
 end
 
 return WorldGrid
-</ProtectedString></Properties></Item></Item></Item><Item class="ServerScriptService" referent="RBX00000051"><Properties></Properties><Item class="Script" referent="RBX00000031"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item></Item><Item class="ServerScriptService" referent="RBX00000057"><Properties></Properties><Item class="Script" referent="RBX00000034"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
 --[[
 	init.server.luau
 	Server bootstrap. Requires every service, registers it with the Framework,
@@ -1687,11 +1714,14 @@ local ORDER = {
 	"DataService",
 	"ReplicationService",
 	"NotificationService",
+	"WorldService",
 	"CityService",
 	"CitizenService",
 	"EconomyService",
 	"ResearchService",
 	"PoliticsService",
+	"DiplomacyService",
+	"AIService",
 }
 
 for _, name in ORDER do
@@ -1781,7 +1811,274 @@ function Framework.start()
 end
 
 return Framework
-</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000027"><Properties><string name="Name">Services</string></Properties><Item class="ModuleScript" referent="RBX00000019"><Properties><string name="Name">CitizenService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000030"><Properties><string name="Name">Services</string></Properties><Item class="ModuleScript" referent="RBX00000019"><Properties><string name="Name">AIService</string><ProtectedString name="Source">--!strict
+--[[
+	Services/AIService.luau
+	Server-owned AI nations that share the exact same Nation shape as players, so
+	the leaderboard, diplomacy and territory systems treat them uniformly (no
+	special-casing anywhere else). Each AI has a strategy profile that biases how
+	it grows and what it trades for.
+
+	AI economies are simulated with a lightweight aggregate growth model rather
+	than the full grid builder — enough to make them living rivals on the
+	leaderboard and credible trade/alliance partners, without a second economy
+	engine to maintain.
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Logger = require(ReplicatedStorage.Nexus.Logger)
+local ResourceMath = require(ReplicatedStorage.Nexus.ResourceMath)
+local Types = require(ReplicatedStorage.Nexus.Types)
+local Technologies = require(ReplicatedStorage.Nexus.Config.Technologies)
+
+local DiplomacyService = require(script.Parent.DiplomacyService)
+local WorldService = require(script.Parent.WorldService)
+
+type Nation = Types.Nation
+
+local log = Logger.new("AIService")
+
+local AIService = {
+	Name = "AIService",
+}
+
+AIService._nations = {} :: { [number]: Nation }
+AIService._profiles = {} :: { [number]: any }
+AIService._age = {} :: { [number]: number }
+
+-- Strategy archetypes bias the growth weights.
+type Profile = {
+	label: string,
+	gov: Types.GovernmentId,
+	gdp: number,
+	pop: number,
+	research: number,
+	diplo: number,
+	military: number,
+}
+
+local ARCHETYPES: { [string]: Profile } = {
+	economic = { label = "economic", gov = "republic", gdp = 1.25, pop = 1.1, research = 0.9, diplo = 1.0, military = 0.6 },
+	technological = { label = "technological", gov = "technocracy", gdp = 1.0, pop = 0.95, research = 1.6, diplo = 0.9, military = 0.7 },
+	diplomatic = { label = "diplomatic", gov = "democracy", gdp = 1.05, pop = 1.05, research = 1.0, diplo = 1.6, military = 0.5 },
+	militarist = { label = "militarist", gov = "military", gdp = 0.95, pop = 1.0, research = 0.85, diplo = 0.7, military = 1.8 },
+	balanced = { label = "balanced", gov = "monarchy", gdp = 1.1, pop = 1.05, research = 1.05, diplo = 1.05, military = 1.0 },
+}
+
+local ROSTER = {
+	{ name = "Veltoria", profile = "economic" },
+	{ name = "Auronia", profile = "technological" },
+	{ name = "Solmara Union", profile = "diplomatic" },
+	{ name = "Kravok Dominion", profile = "militarist" },
+	{ name = "Cindral Republic", profile = "balanced" },
+}
+
+-- ---- Construction ---------------------------------------------------------
+
+local function makeNation(id: number, name: string, profile: Profile): Nation
+	local resources = ResourceMath.zero()
+	resources.money = 30000
+	resources.materials = 800
+	resources.food = 600
+	resources.influence = 60
+	return {
+		ownerId = id,
+		name = name,
+		founded = os.time(),
+		resources = resources,
+		buildings = {},
+		population = {
+			total = 60,
+			employed = 40,
+			happiness = 62,
+			education = 30,
+			health = 45,
+			unrest = 5,
+		},
+		politics = {
+			government = profile.gov,
+			approval = 60,
+			stability = 65,
+			corruption = 8,
+			taxRate = 0.2,
+			activeLaws = {},
+			nextElection = 0,
+		},
+		economy = {
+			gdp = 800,
+			gdpHistory = {},
+			treasury = resources.money,
+			debt = 0,
+			inflation = 2,
+			interestRate = 4,
+			lastTickIncome = 0,
+			lastTickExpense = 0,
+		},
+		research = { unlocked = {}, current = nil, progress = 0, points = 0 },
+		military = { army = 0, navy = 0, air = 0 },
+		diplomacy = { allies = {} },
+		territory = { regions = {} },
+		flags = { ai = true },
+	}
+end
+
+-- ---- Growth simulation ----------------------------------------------------
+
+local function availableTech(nation: Nation): string?
+	local candidates = {}
+	for id, def in Technologies do
+		if not nation.research.unlocked[id] then
+			local ok = true
+			for _, req in def.requires do
+				if not nation.research.unlocked[req] then
+					ok = false
+					break
+				end
+			end
+			if ok then
+				table.insert(candidates, id)
+			end
+		end
+	end
+	if #candidates == 0 then
+		return nil
+	end
+	return candidates[math.random(1, #candidates)]
+end
+
+function AIService:_grow(id: number, nation: Nation, profile: Profile)
+	self._age[id] += 1
+	local age = self._age[id]
+
+	-- Population drifts toward a slowly rising cap.
+	local popCap = 60 + age * 6 * profile.pop
+	nation.population.total = math.floor(nation.population.total + (popCap - nation.population.total) * 0.1 + 0.5)
+
+	-- GDP scales with population and the economic bias, with mild noise.
+	local gdp = nation.population.total * 12 * profile.gdp * (0.9 + math.random() * 0.2)
+	nation.economy.gdp = gdp
+	local income = gdp * nation.politics.taxRate * 0.85
+	nation.resources.money += income
+	nation.economy.treasury = nation.resources.money
+	nation.economy.lastTickIncome = income
+
+	-- Materials and food accumulate; surplus fuels trade.
+	nation.resources.materials += 12 * profile.gdp
+	nation.resources.food += 6
+	nation.resources.influence += 2 * profile.diplo
+
+	-- Research: accumulate and occasionally unlock an available technology.
+	nation.resources.research += nation.population.total * 0.03 * profile.research
+	if math.random() &lt; 0.05 * profile.research then
+		local tech = availableTech(nation)
+		if tech then
+			nation.research.unlocked[tech] = true
+		end
+	end
+
+	-- Militarists build a standing force out of their treasury.
+	if math.random() &lt; 0.15 * profile.military and nation.resources.money &gt; 8000 then
+		nation.resources.money -= 4000
+		local branch = ({ "army", "navy", "air" })[math.random(1, 3)]
+		nation.military[branch] += 1
+	end
+
+	-- Gentle political drift keeps their stats lively.
+	nation.politics.approval = math.clamp(nation.politics.approval + (math.random() - 0.5) * 4, 30, 95)
+	nation.politics.stability = math.clamp(nation.politics.stability + (math.random() - 0.5) * 3, 25, 95)
+end
+
+-- ---- Diplomacy behaviour --------------------------------------------------
+
+function AIService:_maybeTrade()
+	local players = Players:GetPlayers()
+	if #players == 0 then
+		return
+	end
+	-- Pick a random AI and a random human target.
+	local ids = {}
+	for id in self._nations do
+		table.insert(ids, id)
+	end
+	if #ids == 0 then
+		return
+	end
+	local aiId = ids[math.random(1, #ids)]
+	local nation = self._nations[aiId]
+	local profile = self._profiles[aiId]
+	local target = players[math.random(1, #players)]
+
+	if math.random() &lt; 0.15 * profile.diplo then
+		-- Offer an alliance instead of a trade.
+		DiplomacyService:CreateOffer(aiId, target.UserId, "alliance", {}, {})
+		return
+	end
+
+	-- Give a surplus resource, ask for something the profile values.
+	local give: Types.ResourceBag = {}
+	local receive: Types.ResourceBag = {}
+	if nation.resources.money &gt; 12000 then
+		give.money = 4000
+	elseif nation.resources.materials &gt; 300 then
+		give.materials = 150
+	else
+		return
+	end
+	if profile.research &gt; 1.1 then
+		receive.research = 60
+	elseif profile.military &gt; 1.1 then
+		receive.materials = 120
+	else
+		receive.influence = 25
+	end
+	DiplomacyService:CreateOffer(aiId, target.UserId, "trade", give, receive)
+end
+
+-- ---- Lifecycle ------------------------------------------------------------
+
+function AIService:GetNation(id: number): Nation?
+	return self._nations[id]
+end
+
+function AIService:Start()
+	for i, spec in ROSTER do
+		local id = -i
+		local profile = ARCHETYPES[spec.profile]
+		local nation = makeNation(id, spec.name, profile)
+		self._nations[id] = nation
+		self._profiles[id] = profile
+		self._age[id] = 0
+		WorldService:RegisterAI(id, nation)
+	end
+	log:Info(("spawned %d AI nations"):format(#ROSTER))
+
+	-- Growth loop.
+	task.spawn(function()
+		while true do
+			task.wait(6)
+			for id, nation in self._nations do
+				pcall(function()
+					self:_grow(id, nation, self._profiles[id])
+				end)
+			end
+		end
+	end)
+
+	-- Occasional diplomacy toward human players.
+	task.spawn(function()
+		while true do
+			task.wait(20)
+			pcall(function()
+				self:_maybeTrade()
+			end)
+		end
+	end)
+end
+
+return AIService
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000020"><Properties><string name="Name">CitizenService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/CitizenService.luau
 	The populace as a living system. Each tick it moves education and health
@@ -1892,7 +2189,7 @@ function CitizenService:Init()
 end
 
 return CitizenService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000020"><Properties><string name="Name">CityService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000021"><Properties><string name="Name">CityService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/CityService.luau
 	The authoritative city builder. Owns every building a nation places and is
@@ -2296,7 +2593,7 @@ function CityService:Start()
 end
 
 return CityService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000021"><Properties><string name="Name">DataService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000022"><Properties><string name="Name">DataService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/DataService.luau
 	Original, session-safe persistence for player profiles.
@@ -2433,6 +2730,8 @@ local function defaultNation(player: Player): Nation
 			progress = 0,
 			points = 0,
 		},
+		military = { army = 0, navy = 0, air = 0 },
+		diplomacy = { allies = {} },
 		territory = { regions = { "capital" } },
 		flags = {},
 	}
@@ -2707,7 +3006,424 @@ function DataService:Start()
 end
 
 return DataService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000022"><Properties><string name="Name">EconomyService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000023"><Properties><string name="Name">DiplomacyService</string><ProtectedString name="Source">--!strict
+--[[
+	Services/DiplomacyService.luau
+	Player-to-player (and player-to-AI) diplomacy: escrowed resource trades and
+	alliances.
+
+	Trades are safe by construction: the moment an offer is made, the proposer's
+	`give` is withdrawn into escrow, so it cannot be double-spent or duplicated. A
+	trade only completes if the recipient can actually afford `receive`; declines,
+	cancels and expiries refund the escrow. Alliances are mutual and lift both
+	sides' influence generation (see Util/Modifiers).
+
+	AI-targeted offers are auto-resolved here on a timer using a simple resource
+	valuation, so AIService stays focused on running its economies.
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Constants = require(ReplicatedStorage.Nexus.Constants)
+local Logger = require(ReplicatedStorage.Nexus.Logger)
+local Net = require(ReplicatedStorage.Nexus.Net)
+local NetRoutes = require(ReplicatedStorage.Nexus.NetRoutes)
+local ResourceMath = require(ReplicatedStorage.Nexus.ResourceMath)
+local Types = require(ReplicatedStorage.Nexus.Types)
+
+local NotificationService = require(script.Parent.NotificationService)
+local ReplicationService = require(script.Parent.ReplicationService)
+local WorldService = require(script.Parent.WorldService)
+
+type Nation = Types.Nation
+type ResourceBag = Types.ResourceBag
+
+type Offer = {
+	id: string,
+	kind: string, -- "trade" | "alliance"
+	fromId: number,
+	toId: number,
+	give: ResourceBag, -- escrowed from proposer (trade only)
+	receive: ResourceBag, -- demanded from recipient (trade only)
+	createdAt: number,
+	expiresAt: number,
+}
+
+local log = Logger.new("DiplomacyService")
+
+-- Rough barter values used only for AI trade judgement.
+local RESOURCE_VALUE: { [string]: number } = {
+	money = 1,
+	materials = 8,
+	energy = 4,
+	food = 3,
+	research = 15,
+	influence = 12,
+}
+
+local OFFER_TTL = 120
+local MAX_TRADE_AMOUNT = 10_000_000
+
+local DiplomacyService = {
+	Name = "DiplomacyService",
+}
+
+DiplomacyService._offers = {} :: { [string]: Offer }
+DiplomacyService._counter = 0
+
+-- ---- Helpers --------------------------------------------------------------
+
+local VALID_RESOURCE: { [string]: boolean } = {}
+for _, id in Constants.RESOURCE_ORDER do
+	VALID_RESOURCE[id] = true
+end
+
+-- Sanitise a client-supplied resource bag: valid ids, non-negative integers,
+-- capped. Returns the cleaned bag and whether it held anything.
+local function sanitizeBag(payload: any): (ResourceBag, boolean)
+	local out: ResourceBag = {}
+	local any = false
+	if typeof(payload) == "table" then
+		for key, value in payload do
+			if VALID_RESOURCE[key] and typeof(value) == "number" and value == value then
+				local amount = math.floor(math.clamp(value, 0, MAX_TRADE_AMOUNT))
+				if amount &gt; 0 then
+					out[key :: any] = amount
+					any = true
+				end
+			end
+		end
+	end
+	return out, any
+end
+
+local function valueOf(bag: ResourceBag): number
+	local total = 0
+	for resource, amount in bag do
+		total += amount * (RESOURCE_VALUE[resource] or 1)
+	end
+	return total
+end
+
+local function nextId(self): string
+	self._counter += 1
+	return "offer_" .. self._counter
+end
+
+local function markDirty(player: Player?)
+	if player then
+		ReplicationService:MarkDirty(player)
+	end
+end
+
+-- ---- Inbox replication ----------------------------------------------------
+
+local function serialize(offer: Offer): any
+	local fromNation = select(1, WorldService:GetNationById(offer.fromId))
+	local toNation = select(1, WorldService:GetNationById(offer.toId))
+	return {
+		id = offer.id,
+		kind = offer.kind,
+		fromId = offer.fromId,
+		toId = offer.toId,
+		fromName = fromNation and fromNation.name or "Unknown",
+		toName = toNation and toNation.name or "Unknown",
+		give = offer.give,
+		receive = offer.receive,
+		expiresAt = offer.expiresAt,
+	}
+end
+
+function DiplomacyService:_pushInbox(playerId: number)
+	if playerId &lt;= 0 then
+		return
+	end
+	local player = Players:GetPlayerByUserId(playerId)
+	if not player then
+		return
+	end
+	local incoming, outgoing = {}, {}
+	for _, offer in self._offers do
+		if offer.toId == playerId then
+			table.insert(incoming, serialize(offer))
+		elseif offer.fromId == playerId then
+			table.insert(outgoing, serialize(offer))
+		end
+	end
+	Net.fireClient(player, NetRoutes.TRADE_INBOX, { incoming = incoming, outgoing = outgoing })
+end
+
+function DiplomacyService:_pushBoth(offer: Offer)
+	self:_pushInbox(offer.fromId)
+	self:_pushInbox(offer.toId)
+end
+
+-- ---- Core offer lifecycle -------------------------------------------------
+
+--- Create an offer. Escrows `give` for trades. Returns (offer?, reason?).
+function DiplomacyService:CreateOffer(
+	fromId: number,
+	toId: number,
+	kind: string,
+	give: ResourceBag,
+	receive: ResourceBag
+): (Offer?, string?)
+	if fromId == toId then
+		return nil, "self"
+	end
+	local fromNation, fromPlayer = WorldService:GetNationById(fromId)
+	local toNation = WorldService:GetNationById(toId)
+	if not fromNation or not toNation then
+		return nil, "no_nation"
+	end
+
+	if kind == "alliance" then
+		if fromNation.diplomacy.allies[tostring(toId)] then
+			return nil, "already_allied"
+		end
+	else
+		if not ResourceMath.canAfford(fromNation.resources, give) then
+			return nil, "cannot_afford"
+		end
+		-- Escrow the offered resources immediately.
+		ResourceMath.spend(fromNation.resources, give)
+		markDirty(fromPlayer)
+	end
+
+	local offer: Offer = {
+		id = nextId(self),
+		kind = kind,
+		fromId = fromId,
+		toId = toId,
+		give = give,
+		receive = receive,
+		createdAt = os.time(),
+		expiresAt = os.time() + OFFER_TTL,
+	}
+	self._offers[offer.id] = offer
+	self:_pushBoth(offer)
+	return offer, nil
+end
+
+function DiplomacyService:_refund(offer: Offer)
+	if offer.kind == "trade" then
+		local fromNation, fromPlayer = WorldService:GetNationById(offer.fromId)
+		if fromNation then
+			ResourceMath.grant(fromNation.resources, offer.give)
+			markDirty(fromPlayer)
+		end
+	end
+end
+
+function DiplomacyService:_settle(offer: Offer): boolean
+	local fromNation, fromPlayer = WorldService:GetNationById(offer.fromId)
+	local toNation, toPlayer = WorldService:GetNationById(offer.toId)
+	if not fromNation or not toNation then
+		self:_refund(offer)
+		return false
+	end
+
+	if offer.kind == "alliance" then
+		fromNation.diplomacy.allies[tostring(offer.toId)] = true
+		toNation.diplomacy.allies[tostring(offer.fromId)] = true
+		if fromPlayer then
+			NotificationService:Send(fromPlayer, "success", "Alliance formed", "You are now allied with " .. toNation.name)
+		end
+		if toPlayer then
+			NotificationService:Send(toPlayer, "success", "Alliance formed", "You are now allied with " .. fromNation.name)
+		end
+	else
+		-- Recipient must afford the demanded resources.
+		if not ResourceMath.canAfford(toNation.resources, offer.receive) then
+			self:_refund(offer)
+			if fromPlayer then
+				NotificationService:Send(fromPlayer, "warning", "Trade fell through", toNation.name .. " could not pay.")
+			end
+			return false
+		end
+		ResourceMath.spend(toNation.resources, offer.receive)
+		ResourceMath.grant(toNation.resources, offer.give) -- escrowed goods delivered
+		ResourceMath.grant(fromNation.resources, offer.receive)
+		if fromPlayer then
+			NotificationService:Send(fromPlayer, "success", "Trade accepted", toNation.name .. " accepted your offer.")
+		end
+		if toPlayer then
+			NotificationService:Send(toPlayer, "success", "Trade complete", "Traded with " .. fromNation.name)
+		end
+	end
+
+	markDirty(fromPlayer)
+	markDirty(toPlayer)
+	return true
+end
+
+function DiplomacyService:_remove(offer: Offer)
+	self._offers[offer.id] = nil
+	self:_pushBoth(offer)
+end
+
+-- ---- Player request handlers ----------------------------------------------
+
+function DiplomacyService:_onPropose(player: Player, payload: any): any
+	if typeof(payload) ~= "table" or typeof(payload.toId) ~= "number" then
+		return { success = false, reason = "bad_request" }
+	end
+	local give, giveAny = sanitizeBag(payload.give)
+	local receive = select(1, sanitizeBag(payload.receive))
+	if not giveAny then
+		return { success = false, reason = "empty_offer" }
+	end
+	local offer, reason = self:CreateOffer(player.UserId, payload.toId, "trade", give, receive)
+	if not offer then
+		return { success = false, reason = reason }
+	end
+	NotificationService:Send(player, "info", "Trade offer sent")
+	return { success = true, id = offer.id }
+end
+
+function DiplomacyService:_onRespond(player: Player, payload: any): any
+	if typeof(payload) ~= "table" then
+		return { success = false, reason = "bad_request" }
+	end
+	local offer = self._offers[payload.id]
+	if not offer then
+		return { success = false, reason = "not_found" }
+	end
+	if offer.toId ~= player.UserId then
+		return { success = false, reason = "not_yours" }
+	end
+	if payload.accept then
+		self:_settle(offer)
+	else
+		self:_refund(offer)
+		local _, fromPlayer = WorldService:GetNationById(offer.fromId)
+		if fromPlayer then
+			NotificationService:Send(fromPlayer, "info", "Offer declined")
+		end
+	end
+	self:_remove(offer)
+	return { success = true }
+end
+
+function DiplomacyService:_onCancel(player: Player, payload: any): any
+	if typeof(payload) ~= "table" then
+		return { success = false, reason = "bad_request" }
+	end
+	local offer = self._offers[payload.id]
+	if not offer or offer.fromId ~= player.UserId then
+		return { success = false, reason = "not_found" }
+	end
+	self:_refund(offer)
+	self:_remove(offer)
+	return { success = true }
+end
+
+function DiplomacyService:_onAlliance(player: Player, payload: any): any
+	if typeof(payload) ~= "table" or typeof(payload.toId) ~= "number" then
+		return { success = false, reason = "bad_request" }
+	end
+	local offer, reason = self:CreateOffer(player.UserId, payload.toId, "alliance", {}, {})
+	if not offer then
+		return { success = false, reason = reason }
+	end
+	NotificationService:Send(player, "info", "Alliance proposed")
+	return { success = true, id = offer.id }
+end
+
+function DiplomacyService:_onBreakAlliance(player: Player, payload: any): any
+	local nation = select(1, WorldService:GetNationById(player.UserId))
+	if not nation or typeof(payload) ~= "table" or typeof(payload.otherId) ~= "number" then
+		return { success = false, reason = "bad_request" }
+	end
+	nation.diplomacy.allies[tostring(payload.otherId)] = nil
+	local otherNation, otherPlayer = WorldService:GetNationById(payload.otherId)
+	if otherNation then
+		otherNation.diplomacy.allies[tostring(player.UserId)] = nil
+		markDirty(otherPlayer)
+	end
+	markDirty(player)
+	return { success = true }
+end
+
+-- ---- AI + housekeeping ----------------------------------------------------
+
+-- Decide an AI's response to an offer targeting it.
+function DiplomacyService:_resolveAIOffer(offer: Offer)
+	local nation = select(1, WorldService:GetNationById(offer.toId))
+	if not nation then
+		self:_refund(offer)
+		self:_remove(offer)
+		return
+	end
+	local accept = false
+	if offer.kind == "alliance" then
+		local allies = 0
+		for _, a in nation.diplomacy.allies do
+			if a then
+				allies += 1
+			end
+		end
+		accept = allies &lt; 3 and math.random() &lt; 0.6
+	else
+		local receivedValue = valueOf(offer.give)
+		local givenValue = valueOf(offer.receive)
+		accept = ResourceMath.canAfford(nation.resources, offer.receive)
+			and receivedValue &gt;= givenValue * 0.9
+	end
+	if accept then
+		self:_settle(offer)
+	else
+		self:_refund(offer)
+	end
+	self:_remove(offer)
+end
+
+function DiplomacyService:Start()
+	Net.handleRequest(NetRoutes.PROPOSE_TRADE, function(player, payload)
+		return self:_onPropose(player, payload)
+	end, { rate = 5, per = 1 })
+	Net.handleRequest(NetRoutes.RESPOND_TRADE, function(player, payload)
+		return self:_onRespond(player, payload)
+	end, { rate = 10, per = 1 })
+	Net.handleRequest(NetRoutes.CANCEL_TRADE, function(player, payload)
+		return self:_onCancel(player, payload)
+	end, { rate = 10, per = 1 })
+	Net.handleRequest(NetRoutes.PROPOSE_ALLIANCE, function(player, payload)
+		return self:_onAlliance(player, payload)
+	end, { rate = 5, per = 1 })
+	Net.handleRequest(NetRoutes.BREAK_ALLIANCE, function(player, payload)
+		return self:_onBreakAlliance(player, payload)
+	end, { rate = 5, per = 1 })
+
+	DataService.Loaded:Connect(function(player: Player)
+		self:_pushInbox(player.UserId)
+	end)
+
+	-- Housekeeping: expire stale offers and auto-resolve AI-targeted ones.
+	task.spawn(function()
+		while true do
+			task.wait(3)
+			local now = os.time()
+			for _, offer in table.clone(self._offers) do
+				if not self._offers[offer.id] then
+					continue
+				end
+				if offer.toId &lt; 0 then
+					self:_resolveAIOffer(offer)
+				elseif now &gt;= offer.expiresAt then
+					self:_refund(offer)
+					self:_remove(offer)
+				end
+			end
+		end
+	end)
+
+	log:Info("diplomacy handlers ready")
+end
+
+return DiplomacyService
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000024"><Properties><string name="Name">EconomyService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/EconomyService.luau
 	The master simulation tick. Every ECONOMY_TICK it walks each live nation and,
@@ -2919,7 +3635,7 @@ function EconomyService:Start()
 end
 
 return EconomyService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000023"><Properties><string name="Name">NotificationService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000025"><Properties><string name="Name">NotificationService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/NotificationService.luau
 	Server-authored, transient messages to a player's HUD: "Not enough
@@ -2958,7 +3674,7 @@ function NotificationService:Broadcast(severity: Severity, title: string, body: 
 end
 
 return NotificationService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000024"><Properties><string name="Name">PoliticsService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000026"><Properties><string name="Name">PoliticsService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/PoliticsService.luau
 	Government, laws and the public's verdict on your rule. Players set the tax
@@ -3193,7 +3909,7 @@ function PoliticsService:Start()
 end
 
 return PoliticsService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000025"><Properties><string name="Name">ReplicationService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000027"><Properties><string name="Name">ReplicationService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/ReplicationService.luau
 	The only place server state reaches a client. Services never call Net
@@ -3288,7 +4004,7 @@ function ReplicationService:Start()
 end
 
 return ReplicationService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000026"><Properties><string name="Name">ResearchService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000028"><Properties><string name="Name">ResearchService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/ResearchService.luau
 	Drives the technology tree. Research accumulates as the `research` resource
@@ -3400,7 +4116,151 @@ function ResearchService:Start()
 end
 
 return ResearchService
-</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000030"><Properties><string name="Name">Util</string></Properties><Item class="ModuleScript" referent="RBX00000028"><Properties><string name="Name">Modifiers</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000029"><Properties><string name="Name">WorldService</string><ProtectedString name="Source">--!strict
+--[[
+	Services/WorldService.luau
+	The registry that ties every nation — human or AI — into one world. It resolves
+	a nation by id, ranks them into a leaderboard, and broadcasts a compact world
+	directory that powers the diplomacy target list, the leaderboard panel and the
+	territory ownership display.
+
+	Id scheme: player nations use their positive Player.UserId; AI nations use
+	negative ids and register themselves here (AIService calls RegisterAI), so this
+	low-level service never has to depend on AIService.
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Logger = require(ReplicatedStorage.Nexus.Logger)
+local Net = require(ReplicatedStorage.Nexus.Net)
+local NetRoutes = require(ReplicatedStorage.Nexus.NetRoutes)
+local Types = require(ReplicatedStorage.Nexus.Types)
+
+local DataService = require(script.Parent.DataService)
+
+type Nation = Types.Nation
+
+export type Entry = { id: number, nation: Nation, isAI: boolean, player: Player? }
+
+local log = Logger.new("WorldService")
+
+local WorldService = {
+	Name = "WorldService",
+}
+
+WorldService._ai = {} :: { [number]: Nation }
+
+-- Composite "power" used for ranking and AI decision-making.
+function WorldService.powerScore(nation: Nation): number
+	local techCount = 0
+	for _, unlocked in nation.research.unlocked do
+		if unlocked then
+			techCount += 1
+		end
+	end
+	local regionCount = #nation.territory.regions
+	local mil = nation.military
+	local strength = mil.army * 3 + mil.navy * 4 + mil.air * 5
+	local allies = 0
+	for _, a in nation.diplomacy.allies do
+		if a then
+			allies += 1
+		end
+	end
+	return nation.economy.gdp * 0.4
+		+ nation.population.total * 3
+		+ nation.economy.treasury * 0.02
+		+ techCount * 40
+		+ regionCount * 80
+		+ strength * 4
+		+ allies * 30
+end
+
+--- AIService registers/updates its nations here.
+function WorldService:RegisterAI(id: number, nation: Nation)
+	self._ai[id] = nation
+end
+
+function WorldService:GetAINations(): { [number]: Nation }
+	return self._ai
+end
+
+--- Resolve a nation by id. Returns (nation?, player?, isAI).
+function WorldService:GetNationById(id: number): (Nation?, Player?, boolean)
+	if id &gt; 0 then
+		local player = Players:GetPlayerByUserId(id)
+		if player then
+			return DataService:GetNation(player), player, false
+		end
+		return nil, nil, false
+	end
+	return self._ai[id], nil, true
+end
+
+--- Every live nation as an Entry list.
+function WorldService:GetAllEntries(): { Entry }
+	local entries: { Entry } = {}
+	for _, player in Players:GetPlayers() do
+		local nation = DataService:GetNation(player)
+		if nation then
+			table.insert(entries, { id = player.UserId, nation = nation, isAI = false, player = player })
+		end
+	end
+	for id, nation in self._ai do
+		table.insert(entries, { id = id, nation = nation, isAI = true, player = nil })
+	end
+	return entries
+end
+
+--- Compact, replication-safe directory sorted by power (the leaderboard order).
+function WorldService:BuildDirectory(): { any }
+	local dir = {}
+	for _, entry in self:GetAllEntries() do
+		local n = entry.nation
+		table.insert(dir, {
+			id = entry.id,
+			name = n.name,
+			isAI = entry.isAI,
+			government = n.politics.government,
+			power = math.floor(WorldService.powerScore(n)),
+			gdp = math.floor(n.economy.gdp),
+			population = n.population.total,
+			treasury = math.floor(n.economy.treasury),
+			regions = #n.territory.regions,
+			strength = n.military.army * 3 + n.military.navy * 4 + n.military.air * 5,
+		})
+	end
+	table.sort(dir, function(a, b)
+		return a.power &gt; b.power
+	end)
+	for rank, row in dir do
+		row.rank = rank
+	end
+	return dir
+end
+
+function WorldService:Broadcast()
+	Net.fireAllClients(NetRoutes.WORLD_SYNC, self:BuildDirectory())
+end
+
+function WorldService:Start()
+	task.spawn(function()
+		while true do
+			task.wait(4)
+			local ok, err = pcall(function()
+				self:Broadcast()
+			end)
+			if not ok then
+				log:Warn("world broadcast failed: " .. tostring(err))
+			end
+		end
+	end)
+	log:Info("world registry online")
+end
+
+return WorldService
+</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000033"><Properties><string name="Name">Util</string></Properties><Item class="ModuleScript" referent="RBX00000031"><Properties><string name="Name">Modifiers</string><ProtectedString name="Source">--!strict
 --[[
 	Util/Modifiers.luau
 	Resolves a nation's active government, unlocked technologies, and enacted
@@ -3506,17 +4366,27 @@ function Modifiers.resolve(nation: Nation): Resolved
 		lawUpkeep += m.upkeep or 0
 	end
 
+	-- Each ally lifts influence generation; alliances are a diplomatic engine.
+	local allyCount = 0
+	if nation.diplomacy and nation.diplomacy.allies then
+		for _, active in nation.diplomacy.allies do
+			if active then
+				allyCount += 1
+			end
+		end
+	end
+
 	r.corruptionCreepMult *= (1 + techCreep)
 	r.researchBonusMult *= (1 + techResearch + lawResearch)
 	r.foodProductionMult += techFood + lawFood
-	r.influenceBonusMult *= (1 + techInfluence)
+	r.influenceBonusMult *= (1 + techInfluence + allyCount * 0.05)
 	r.upkeepMult += lawUpkeep
 
 	return r
 end
 
 return Modifiers
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000029"><Properties><string name="Name">Validation</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000032"><Properties><string name="Name">Validation</string><ProtectedString name="Source">--!strict
 --[[
 	Util/Validation.luau
 	Server-side guards for untrusted client payloads. Every request handler runs
@@ -3565,7 +4435,7 @@ function Validation.readPosition(payload: any): ({ x: number, z: number })?
 end
 
 return Validation
-</ProtectedString></Properties></Item></Item></Item></Item><Item class="StarterPlayer" referent="RBX00000053"><Properties></Properties><Item class="StarterPlayerScripts" referent="RBX00000052"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX00000049"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item></Item></Item><Item class="StarterPlayer" referent="RBX00000059"><Properties></Properties><Item class="StarterPlayerScripts" referent="RBX00000058"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX00000055"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
 --[[
 	init.client.luau
 	Client bootstrap. Registers every controller with the ClientFramework, then
@@ -3585,6 +4455,7 @@ local Controllers = script.Controllers
 
 local ORDER = {
 	"StateController",
+	"WorldStateController",
 	"AmbianceController",
 	"NotificationController",
 	"HudController",
@@ -3592,6 +4463,8 @@ local ORDER = {
 	"BuildController",
 	"PoliticsController",
 	"ResearchController",
+	"DiplomacyController",
+	"LeaderboardController",
 }
 
 for _, name in ORDER do
@@ -3603,7 +4476,7 @@ end
 ClientFramework.start()
 
 print("[Nexus] client online for " .. Players.LocalPlayer.Name)
-</ProtectedString></Properties><Item class="ModuleScript" referent="RBX00000032"><Properties><string name="Name">ClientFramework</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties><Item class="ModuleScript" referent="RBX00000035"><Properties><string name="Name">ClientFramework</string><ProtectedString name="Source">--!strict
 --[[
 	ClientFramework.luau
 	The client mirror of the server Framework: a controller registry with the
@@ -3668,7 +4541,7 @@ function ClientFramework.start()
 end
 
 return ClientFramework
-</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000041"><Properties><string name="Name">Controllers</string></Properties><Item class="ModuleScript" referent="RBX00000033"><Properties><string name="Name">AmbianceController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000047"><Properties><string name="Name">Controllers</string></Properties><Item class="ModuleScript" referent="RBX00000036"><Properties><string name="Name">AmbianceController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/AmbianceController.luau
 	Sets the mood: cinematic lighting, atmospheric depth and post-processing.
@@ -3747,7 +4620,7 @@ function AmbianceController:Init()
 end
 
 return AmbianceController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000034"><Properties><string name="Name">BuildController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000037"><Properties><string name="Name">BuildController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/BuildController.luau
 	Everything the player touches to shape their city:
@@ -4342,7 +5215,473 @@ function BuildController:Start()
 end
 
 return BuildController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000035"><Properties><string name="Name">HudController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000038"><Properties><string name="Name">DiplomacyController</string><ProtectedString name="Source">--!strict
+--[[
+	Controllers/DiplomacyController.luau
+	The diplomacy screen: pick another nation, compose a resource-for-resource
+	trade (or propose an alliance), and act on incoming offers. Reads the world
+	directory and trade inbox from WorldStateController; every action is a
+	validated server request.
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Constants = require(ReplicatedStorage.Nexus.Constants)
+local Net = require(ReplicatedStorage.Nexus.Net)
+local NetRoutes = require(ReplicatedStorage.Nexus.NetRoutes)
+local Resources = require(ReplicatedStorage.Nexus.Config.Resources)
+
+local Create = require(script.Parent.Parent.UI.Create)
+local Decor = require(script.Parent.Parent.UI.Decor)
+local Format = require(script.Parent.Parent.UI.Format)
+local Motion = require(script.Parent.Parent.UI.Motion)
+local Theme = require(script.Parent.Parent.UI.Theme)
+
+local ORDER = Constants.RESOURCE_ORDER
+
+local DiplomacyController = {
+	Name = "DiplomacyController",
+}
+
+DiplomacyController._panel = nil :: Frame?
+DiplomacyController._targetId = nil :: number?
+DiplomacyController._targetName = "—"
+DiplomacyController._give = { idx = 1, amt = 1000 }
+DiplomacyController._recv = { idx = 2, amt = 100 }
+DiplomacyController._refs = {} :: any
+
+local function request(route: string, payload: any)
+	task.spawn(function()
+		Net.request(route, payload)
+	end)
+end
+
+local function stepFor(resource: string): number
+	if resource == "money" then
+		return 1000
+	elseif resource == "materials" or resource == "food" then
+		return 50
+	end
+	return 20
+end
+
+local function bagSummary(bag: any): string
+	local parts = {}
+	for _, id in ORDER do
+		local amt = bag and bag[id]
+		if amt and amt &gt; 0 then
+			table.insert(parts, (Resources[id].symbol) .. Format.abbrev(amt))
+		end
+	end
+	return #parts &gt; 0 and table.concat(parts, " ") or "—"
+end
+
+-- ---- Resource+amount stepper -----------------------------------------------
+
+function DiplomacyController:_stepper(label: string, state: any, order: number): Frame
+	local resLabel: TextLabel
+	local amtLabel: TextLabel
+
+	local function refresh()
+		local res = ORDER[state.idx]
+		resLabel.Text = Resources[res].symbol .. " " .. Resources[res].displayName
+		amtLabel.Text = Format.abbrev(state.amt)
+	end
+
+	local frame = Create("Frame", {
+		LayoutOrder = order,
+		BackgroundColor3 = Theme.color.panelLight,
+		Size = UDim2.new(1, 0, 0, 56),
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+			Create("TextLabel", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(10, 4),
+				Size = UDim2.new(1, -20, 0, 14),
+				Font = Theme.font.regular,
+				Text = label,
+				TextColor3 = Theme.color.textDim,
+				TextSize = 11,
+				TextXAlignment = Enum.TextXAlignment.Left,
+			}),
+			Create("TextButton", {
+				Name = "Res",
+				BackgroundColor3 = Theme.color.bg,
+				Position = UDim2.fromOffset(10, 20),
+				Size = UDim2.fromOffset(150, 28),
+				Font = Theme.font.bold,
+				Text = "",
+				TextColor3 = Theme.color.text,
+				TextSize = 12,
+				[Create.Children] = { Create("UICorner", { CornerRadius = UDim.new(0, 6) }) },
+				[Create.Event] = { Activated = function()
+					state.idx = (state.idx % #ORDER) + 1
+					state.amt = stepFor(ORDER[state.idx])
+					refresh()
+				end },
+			}),
+			Create("TextButton", {
+				BackgroundColor3 = Theme.color.accentDim,
+				AnchorPoint = Vector2.new(1, 0),
+				Position = UDim2.new(1, -84, 0, 20),
+				Size = UDim2.fromOffset(28, 28),
+				Font = Theme.font.bold,
+				Text = "−",
+				TextColor3 = Theme.color.text,
+				TextSize = 18,
+				[Create.Children] = { Create("UICorner", { CornerRadius = UDim.new(0, 6) }) },
+				[Create.Event] = { Activated = function()
+					state.amt = math.max(0, state.amt - stepFor(ORDER[state.idx]))
+					refresh()
+				end },
+			}),
+			Create("TextLabel", {
+				Name = "Amt",
+				BackgroundTransparency = 1,
+				AnchorPoint = Vector2.new(1, 0),
+				Position = UDim2.new(1, -46, 0, 20),
+				Size = UDim2.fromOffset(40, 28),
+				Font = Theme.font.bold,
+				Text = "0",
+				TextColor3 = Theme.color.text,
+				TextSize = 13,
+			}),
+			Create("TextButton", {
+				BackgroundColor3 = Theme.color.accentDim,
+				AnchorPoint = Vector2.new(1, 0),
+				Position = UDim2.new(1, -10, 0, 20),
+				Size = UDim2.fromOffset(28, 28),
+				Font = Theme.font.bold,
+				Text = "+",
+				TextColor3 = Theme.color.text,
+				TextSize = 18,
+				[Create.Children] = { Create("UICorner", { CornerRadius = UDim.new(0, 6) }) },
+				[Create.Event] = { Activated = function()
+					state.amt += stepFor(ORDER[state.idx])
+					refresh()
+				end },
+			}),
+		},
+	}) :: Frame
+	resLabel = frame:FindFirstChild("Res") :: TextLabel
+	amtLabel = frame:FindFirstChild("Amt") :: TextLabel
+	refresh()
+	return frame
+end
+
+-- ---- Panel -----------------------------------------------------------------
+
+function DiplomacyController:_build()
+	local HudController = require(script.Parent.HudController)
+	local gui = HudController:GetGui()
+
+	local targetList = Create("ScrollingFrame", {
+		Position = UDim2.fromOffset(10, 40),
+		Size = UDim2.new(1, -20, 0, 130),
+		BackgroundColor3 = Theme.color.bg,
+		BackgroundTransparency = 0.4,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 4,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+			Create("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }),
+			Create("UIPadding", { PaddingTop = UDim.new(0, 4), PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4) }),
+		},
+	}) :: ScrollingFrame
+
+	local targetLabel = Create("TextLabel", {
+		BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(10, 176),
+		Size = UDim2.new(1, -20, 0, 18),
+		Font = Theme.font.bold,
+		Text = "Select a nation above",
+		TextColor3 = Theme.color.accent,
+		TextSize = 13,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}) :: TextLabel
+
+	local composer = Create("Frame", {
+		Position = UDim2.fromOffset(10, 198),
+		Size = UDim2.new(1, -20, 0, 128),
+		BackgroundTransparency = 1,
+		[Create.Children] = {
+			Create("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }),
+		},
+	})
+	self:_stepper("You give", self._give, 1).Parent = composer
+	self:_stepper("You receive", self._recv, 2).Parent = composer
+
+	local buttons = Create("Frame", {
+		Position = UDim2.fromOffset(10, 332),
+		Size = UDim2.new(1, -20, 0, 34),
+		BackgroundTransparency = 1,
+		[Create.Children] = {
+			Create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Horizontal,
+				Padding = UDim.new(0, 8),
+				SortOrder = Enum.SortOrder.LayoutOrder,
+			}),
+			Create("TextButton", {
+				BackgroundColor3 = Theme.color.accentDim,
+				Size = UDim2.fromOffset(150, 34),
+				Font = Theme.font.bold,
+				Text = "Send Trade",
+				TextColor3 = Theme.color.text,
+				TextSize = 14,
+				[Create.Children] = { Create("UICorner", { CornerRadius = UDim.new(0, 8) }) },
+				[Create.Event] = { Activated = function()
+					self:_sendTrade()
+				end },
+			}),
+			Create("TextButton", {
+				BackgroundColor3 = Theme.color.panelLight,
+				Size = UDim2.fromOffset(150, 34),
+				Font = Theme.font.bold,
+				Text = "Propose Alliance",
+				TextColor3 = Theme.color.text,
+				TextSize = 14,
+				[Create.Children] = { Create("UICorner", { CornerRadius = UDim.new(0, 8) }) },
+				[Create.Event] = { Activated = function()
+					if self._targetId then
+						request(NetRoutes.PROPOSE_ALLIANCE, { toId = self._targetId })
+					end
+				end },
+			}),
+		},
+	})
+
+	local inbox = Create("ScrollingFrame", {
+		Position = UDim2.fromOffset(10, 396),
+		Size = UDim2.new(1, -20, 1, -406),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 4,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		[Create.Children] = {
+			Create("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder }),
+		},
+	}) :: ScrollingFrame
+
+	local panel = Create("Frame", {
+		Name = "DiplomacyPanel",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(380, 560),
+		BackgroundColor3 = Theme.color.panel,
+		Visible = false,
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = Theme.corner }),
+			Create("UIStroke", { Color = Theme.color.stroke, Thickness = 1 }),
+			Create("TextLabel", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(14, 10),
+				Size = UDim2.new(1, -28, 0, 22),
+				Font = Theme.font.bold,
+				Text = "🤝 Diplomacy",
+				TextColor3 = Theme.color.text,
+				TextSize = 17,
+				TextXAlignment = Enum.TextXAlignment.Left,
+			}),
+			Create("TextLabel", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(14, 374),
+				Size = UDim2.new(1, -28, 0, 18),
+				Font = Theme.font.bold,
+				Text = "Incoming offers",
+				TextColor3 = Theme.color.accent2,
+				TextSize = 13,
+				TextXAlignment = Enum.TextXAlignment.Left,
+			}),
+			targetList,
+			targetLabel,
+			composer,
+			buttons,
+			inbox,
+		},
+	}) :: Frame
+	Decor.gradient(panel, Theme.gradient.panel)
+	panel.Parent = gui
+	self._panel = panel
+	self._refs = { targetList = targetList, targetLabel = targetLabel, inbox = inbox }
+end
+
+function DiplomacyController:_sendTrade()
+	if not self._targetId then
+		return
+	end
+	local giveRes = ORDER[self._give.idx]
+	local recvRes = ORDER[self._recv.idx]
+	local give = self._give.amt &gt; 0 and { [giveRes] = self._give.amt } or {}
+	local receive = self._recv.amt &gt; 0 and { [recvRes] = self._recv.amt } or {}
+	request(NetRoutes.PROPOSE_TRADE, { toId = self._targetId, give = give, receive = receive })
+end
+
+function DiplomacyController:_selectTarget(id: number, name: string)
+	self._targetId = id
+	self._targetName = name
+	if self._refs.targetLabel then
+		self._refs.targetLabel.Text = "Trading with: " .. name
+	end
+	self:_refreshTargets(nil)
+end
+
+function DiplomacyController:_refreshTargets(directory: { any }?)
+	local WorldStateController = require(script.Parent.WorldStateController)
+	directory = directory or WorldStateController:GetDirectory()
+	local list = self._refs.targetList
+	if not list then
+		return
+	end
+	for _, child in list:GetChildren() do
+		if child:IsA("TextButton") then
+			child:Destroy()
+		end
+	end
+	local myId = Players.LocalPlayer.UserId
+	for _, row in directory :: { any } do
+		if row.id == myId then
+			continue
+		end
+		local selected = row.id == self._targetId
+		local btn = Create("TextButton", {
+			LayoutOrder = row.rank,
+			BackgroundColor3 = selected and Theme.color.accentDim or Theme.color.panelLight,
+			Size = UDim2.new(1, 0, 0, 30),
+			Font = Theme.font.medium,
+			Text = "",
+			[Create.Children] = {
+				Create("UICorner", { CornerRadius = UDim.new(0, 6) }),
+				Create("TextLabel", {
+					BackgroundTransparency = 1,
+					Position = UDim2.fromOffset(8, 0),
+					Size = UDim2.new(1, -80, 1, 0),
+					Font = Theme.font.medium,
+					Text = row.name .. (row.isAI and "  🤖" or ""),
+					TextColor3 = Theme.color.text,
+					TextSize = 12,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+				}),
+				Create("TextLabel", {
+					BackgroundTransparency = 1,
+					AnchorPoint = Vector2.new(1, 0.5),
+					Position = UDim2.new(1, -8, 0.5, 0),
+					Size = UDim2.fromOffset(64, 30),
+					Font = Theme.font.bold,
+					Text = "⚙" .. Format.abbrev(row.power),
+					TextColor3 = Theme.color.accent,
+					TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Right,
+				}),
+			},
+			[Create.Event] = { Activated = function()
+				self:_selectTarget(row.id, row.name)
+			end },
+		})
+		btn.Parent = list
+	end
+end
+
+function DiplomacyController:_refreshInbox(inbox: any)
+	local list = self._refs.inbox
+	if not list then
+		return
+	end
+	for _, child in list:GetChildren() do
+		if child:IsA("Frame") then
+			child:Destroy()
+		end
+	end
+	for i, offer in inbox.incoming do
+		local isAlliance = offer.kind == "alliance"
+		local desc = isAlliance and "Proposes an alliance"
+			or ("Gives " .. bagSummary(offer.give) .. "  for  " .. bagSummary(offer.receive))
+		local card = Create("Frame", {
+			LayoutOrder = i,
+			BackgroundColor3 = Theme.color.panelLight,
+			Size = UDim2.new(1, 0, 0, 58),
+			[Create.Children] = {
+				Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+				Create("TextLabel", {
+					BackgroundTransparency = 1,
+					Position = UDim2.fromOffset(10, 5),
+					Size = UDim2.new(1, -20, 0, 16),
+					Font = Theme.font.bold,
+					Text = offer.fromName,
+					TextColor3 = Theme.color.text,
+					TextSize = 13,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}),
+				Create("TextLabel", {
+					BackgroundTransparency = 1,
+					Position = UDim2.fromOffset(10, 22),
+					Size = UDim2.new(1, -20, 0, 14),
+					Font = Theme.font.regular,
+					Text = desc,
+					TextColor3 = Theme.color.textDim,
+					TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+				}),
+				Create("TextButton", {
+					BackgroundColor3 = Theme.color.good,
+					Position = UDim2.fromOffset(10, 38),
+					Size = UDim2.fromOffset(70, 16),
+					Font = Theme.font.bold,
+					Text = "Accept",
+					TextColor3 = Theme.color.bg,
+					TextSize = 11,
+					[Create.Children] = { Create("UICorner", { CornerRadius = UDim.new(0, 5) }) },
+					[Create.Event] = { Activated = function()
+						request(NetRoutes.RESPOND_TRADE, { id = offer.id, accept = true })
+					end },
+				}),
+				Create("TextButton", {
+					BackgroundColor3 = Theme.color.bad,
+					Position = UDim2.fromOffset(88, 38),
+					Size = UDim2.fromOffset(70, 16),
+					Font = Theme.font.bold,
+					Text = "Decline",
+					TextColor3 = Theme.color.bg,
+					TextSize = 11,
+					[Create.Children] = { Create("UICorner", { CornerRadius = UDim.new(0, 5) }) },
+					[Create.Event] = { Activated = function()
+						request(NetRoutes.RESPOND_TRADE, { id = offer.id, accept = false })
+					end },
+				}),
+			},
+		})
+		card.Parent = list
+	end
+end
+
+function DiplomacyController:Start()
+	local HudController = require(script.Parent.HudController)
+	local WorldStateController = require(script.Parent.WorldStateController)
+
+	self:_build()
+	HudController:AddButton("🤝 Diplomacy", function()
+		if self._panel then
+			Motion.toggle(self._panel)
+		end
+	end)
+
+	WorldStateController.DirectoryChanged:Connect(function(dir)
+		self:_refreshTargets(dir)
+	end)
+	WorldStateController.InboxChanged:Connect(function(inbox)
+		self:_refreshInbox(inbox)
+	end)
+	self:_refreshTargets(nil)
+	self:_refreshInbox(WorldStateController:GetInbox())
+end
+
+return DiplomacyController
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000039"><Properties><string name="Name">HudController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/HudController.luau
 	The persistent HUD: a top resource bar, a compact national-stats panel, and a
@@ -4372,7 +5711,7 @@ HudController._gui = nil :: ScreenGui?
 HudController._chips = {} :: { [string]: TextLabel }
 HudController._stats = {} :: { [string]: TextLabel }
 HudController._nameLabel = nil :: TextLabel?
-HudController._buttonBar = nil :: Frame?
+HudController._buttonBar = nil :: ScrollingFrame?
 
 -- ---- Builders -------------------------------------------------------------
 
@@ -4458,7 +5797,8 @@ function HudController:AddButton(text: string, onClick: () -&gt; ()): TextButton
 	local button = Create("TextButton", {
 		AutoButtonColor = true,
 		BackgroundColor3 = Theme.color.panelLight,
-		Size = UDim2.fromOffset(120, 44),
+		AutomaticSize = Enum.AutomaticSize.X,
+		Size = UDim2.fromOffset(0, 44),
 		Font = Theme.font.bold,
 		Text = text,
 		TextColor3 = Theme.color.text,
@@ -4466,6 +5806,8 @@ function HudController:AddButton(text: string, onClick: () -&gt; ()): TextButton
 		[Create.Children] = {
 			Create("UICorner", { CornerRadius = Theme.corner }),
 			Create("UIStroke", { Color = Theme.color.stroke, Thickness = 1 }),
+			Create("UIPadding", { PaddingLeft = UDim.new(0, 16), PaddingRight = UDim.new(0, 16) }),
+			Create("UISizeConstraint", { MinSize = Vector2.new(96, 44) }),
 		},
 		[Create.Event] = { Activated = onClick },
 	}) :: TextButton
@@ -4573,23 +5915,29 @@ function HudController:Init()
 	end
 	statsPanel.Parent = gui
 
-	-- Bottom action bar.
-	self._buttonBar = Create("Frame", {
+	-- Bottom action bar — a horizontal scroller so any number of buttons fits,
+	-- even on narrow mobile screens.
+	self._buttonBar = Create("ScrollingFrame", {
 		Name = "ActionBar",
 		AnchorPoint = Vector2.new(0.5, 1),
-		Position = UDim2.new(0.5, 0, 1, -16),
-		Size = UDim2.fromOffset(400, 44),
+		Position = UDim2.new(0.5, 0, 1, -14),
+		Size = UDim2.new(1, -32, 0, 48),
 		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollingDirection = Enum.ScrollingDirection.X,
+		ScrollBarThickness = 0,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.X,
 		[Create.Children] = {
 			Create("UIListLayout", {
 				FillDirection = Enum.FillDirection.Horizontal,
-				Padding = UDim.new(0, 10),
+				Padding = UDim.new(0, 8),
 				HorizontalAlignment = Enum.HorizontalAlignment.Center,
 				VerticalAlignment = Enum.VerticalAlignment.Center,
 				SortOrder = Enum.SortOrder.LayoutOrder,
 			}),
 		},
-	}) :: Frame
+	}) :: ScrollingFrame
 	self._buttonBar.Parent = gui
 
 	gui.Parent = playerGui
@@ -4659,7 +6007,161 @@ function HudController:Start()
 end
 
 return HudController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000036"><Properties><string name="Name">NotificationController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000040"><Properties><string name="Name">LeaderboardController</string><ProtectedString name="Source">--!strict
+--[[
+	Controllers/LeaderboardController.luau
+	A ranked table of every nation in the world (players and AI) by power score.
+	Rebuilds from the WORLD_SYNC directory; the local player's row is highlighted.
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Format = require(script.Parent.Parent.UI.Format)
+
+local Create = require(script.Parent.Parent.UI.Create)
+local Decor = require(script.Parent.Parent.UI.Decor)
+local Motion = require(script.Parent.Parent.UI.Motion)
+local Theme = require(script.Parent.Parent.UI.Theme)
+
+local LeaderboardController = {
+	Name = "LeaderboardController",
+}
+
+LeaderboardController._panel = nil :: Frame?
+LeaderboardController._list = nil :: ScrollingFrame?
+
+function LeaderboardController:_build()
+	local HudController = require(script.Parent.HudController)
+	local gui = HudController:GetGui()
+
+	local list = Create("ScrollingFrame", {
+		Position = UDim2.fromOffset(10, 42),
+		Size = UDim2.new(1, -20, 1, -52),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 4,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		[Create.Children] = {
+			Create("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder }),
+		},
+	}) :: ScrollingFrame
+	self._list = list
+
+	local panel = Create("Frame", {
+		Name = "LeaderboardPanel",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(360, 460),
+		BackgroundColor3 = Theme.color.panel,
+		Visible = false,
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = Theme.corner }),
+			Create("UIStroke", { Color = Theme.color.stroke, Thickness = 1 }),
+			Create("TextLabel", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(14, 10),
+				Size = UDim2.new(1, -28, 0, 22),
+				Font = Theme.font.bold,
+				Text = "🏆 Global Leaderboard",
+				TextColor3 = Theme.color.text,
+				TextSize = 17,
+				TextXAlignment = Enum.TextXAlignment.Left,
+			}),
+			list,
+		},
+	}) :: Frame
+	Decor.gradient(panel, Theme.gradient.panel)
+	panel.Parent = gui
+	self._panel = panel
+end
+
+function LeaderboardController:_refresh(directory: { any })
+	local list = self._list
+	if not list then
+		return
+	end
+	for _, child in list:GetChildren() do
+		if child:IsA("TextLabel") or child:IsA("Frame") then
+			child:Destroy()
+		end
+	end
+	local myId = Players.LocalPlayer.UserId
+	for _, row in directory do
+		local mine = row.id == myId
+		local rowFrame = Create("Frame", {
+			LayoutOrder = row.rank,
+			BackgroundColor3 = mine and Theme.color.accentDim or Theme.color.panelLight,
+			Size = UDim2.new(1, 0, 0, 40),
+			[Create.Children] = {
+				Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+				Create("TextLabel", {
+					BackgroundTransparency = 1,
+					Position = UDim2.fromOffset(10, 0),
+					Size = UDim2.fromOffset(34, 40),
+					Font = Theme.font.black,
+					Text = "#" .. row.rank,
+					TextColor3 = row.rank &lt;= 3 and Theme.color.accent2 or Theme.color.textDim,
+					TextSize = 15,
+				}),
+				Create("TextLabel", {
+					BackgroundTransparency = 1,
+					Position = UDim2.fromOffset(48, 4),
+					Size = UDim2.new(1, -140, 0, 18),
+					Font = Theme.font.bold,
+					Text = row.name .. (row.isAI and "  🤖" or ""),
+					TextColor3 = Theme.color.text,
+					TextSize = 14,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+				}),
+				Create("TextLabel", {
+					BackgroundTransparency = 1,
+					Position = UDim2.fromOffset(48, 22),
+					Size = UDim2.new(1, -140, 0, 14),
+					Font = Theme.font.regular,
+					Text = ("Pop %s · GDP %s"):format(Format.abbrev(row.population), Format.abbrev(row.gdp)),
+					TextColor3 = Theme.color.textDim,
+					TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}),
+				Create("TextLabel", {
+					BackgroundTransparency = 1,
+					AnchorPoint = Vector2.new(1, 0.5),
+					Position = UDim2.new(1, -12, 0.5, 0),
+					Size = UDim2.fromOffset(80, 40),
+					Font = Theme.font.bold,
+					Text = "⚙ " .. Format.abbrev(row.power),
+					TextColor3 = Theme.color.accent,
+					TextSize = 14,
+					TextXAlignment = Enum.TextXAlignment.Right,
+				}),
+			},
+		})
+		rowFrame.Parent = list
+	end
+end
+
+function LeaderboardController:Start()
+	local HudController = require(script.Parent.HudController)
+	local WorldStateController = require(script.Parent.WorldStateController)
+
+	self:_build()
+	HudController:AddButton("🏆 Ranks", function()
+		if self._panel then
+			Motion.toggle(self._panel)
+		end
+	end)
+
+	WorldStateController.DirectoryChanged:Connect(function(directory)
+		self:_refresh(directory)
+	end)
+	self:_refresh(WorldStateController:GetDirectory())
+end
+
+return LeaderboardController
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000041"><Properties><string name="Name">NotificationController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/NotificationController.luau
 	Renders transient server notifications as stacked toasts in the top-right.
@@ -4795,7 +6297,7 @@ function NotificationController:Start()
 end
 
 return NotificationController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000037"><Properties><string name="Name">PoliticsController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000042"><Properties><string name="Name">PoliticsController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/PoliticsController.luau
 	The governance panel: adjust the tax rate, switch government type, and
@@ -5076,7 +6578,7 @@ function PoliticsController:Start()
 end
 
 return PoliticsController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000038"><Properties><string name="Name">ResearchController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000043"><Properties><string name="Name">ResearchController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/ResearchController.luau
 	The technology panel. Lists every tech grouped by branch with a live status —
@@ -5321,7 +6823,7 @@ function ResearchController:Start()
 end
 
 return ResearchController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000039"><Properties><string name="Name">StateController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000044"><Properties><string name="Name">StateController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/StateController.luau
 	The client's single source of truth for replicated nation state. It listens
@@ -5381,7 +6883,7 @@ function StateController:Init()
 end
 
 return StateController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000040"><Properties><string name="Name">WorldController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000045"><Properties><string name="Name">WorldController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/WorldController.luau
 	Builds the 3D city view: a stylized ground with a glowing district grid,
@@ -5766,7 +7268,56 @@ function WorldController:Start()
 end
 
 return WorldController
-</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000048"><Properties><string name="Name">UI</string></Properties><Item class="Folder" referent="RBX00000042"><Properties><string name="Name">Components</string></Properties></Item><Item class="ModuleScript" referent="RBX00000043"><Properties><string name="Name">Create</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000046"><Properties><string name="Name">WorldStateController</string><ProtectedString name="Source">--!strict
+--[[
+	Controllers/WorldStateController.luau
+	Client store for world-scope data that isn't part of the player's own nation:
+	the ranked directory of all nations (WORLD_SYNC) and the player's trade inbox
+	(TRADE_INBOX). Diplomacy and leaderboard panels subscribe here.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Net = require(ReplicatedStorage.Nexus.Net)
+local NetRoutes = require(ReplicatedStorage.Nexus.NetRoutes)
+local Signal = require(ReplicatedStorage.Nexus.Signal)
+
+local WorldStateController = {
+	Name = "WorldStateController",
+	DirectoryChanged = Signal.new() :: any, -- fires (directory)
+	InboxChanged = Signal.new() :: any, -- fires (inbox)
+}
+
+WorldStateController._directory = {} :: { any }
+WorldStateController._inbox = { incoming = {}, outgoing = {} } :: any
+
+function WorldStateController:GetDirectory(): { any }
+	return self._directory
+end
+
+function WorldStateController:GetInbox(): any
+	return self._inbox
+end
+
+function WorldStateController:Init()
+	Net.onEvent(NetRoutes.WORLD_SYNC, function(list)
+		if typeof(list) ~= "table" then
+			return
+		end
+		self._directory = list
+		self.DirectoryChanged:Fire(list)
+	end)
+	Net.onEvent(NetRoutes.TRADE_INBOX, function(data)
+		if typeof(data) ~= "table" then
+			return
+		end
+		self._inbox = { incoming = data.incoming or {}, outgoing = data.outgoing or {} }
+		self.InboxChanged:Fire(self._inbox)
+	end)
+end
+
+return WorldStateController
+</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000054"><Properties><string name="Name">UI</string></Properties><Item class="Folder" referent="RBX00000048"><Properties><string name="Name">Components</string></Properties></Item><Item class="ModuleScript" referent="RBX00000049"><Properties><string name="Name">Create</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Create.luau
 	A tiny declarative helper for building Instance trees without the noise of
@@ -5826,7 +7377,7 @@ local callable = setmetatable(Create, {
 
 -- The `any` cast lets callers use both `Create("Frame")` and `Create.Children`.
 return (callable :: any) :: (((className: string, props: { [any]: any }?) -&gt; Instance) &amp; typeof(Create))
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000044"><Properties><string name="Name">Decor</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000050"><Properties><string name="Name">Decor</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Decor.luau
 	Small cosmetic helpers so every panel, chip and button gets the same finish
@@ -5894,7 +7445,7 @@ function Decor.shadow(frame: GuiObject): Frame
 end
 
 return Decor
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000045"><Properties><string name="Name">Format</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000051"><Properties><string name="Name">Format</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Format.luau
 	Number/text formatting shared by every panel, so "12.3k" and "+4.5%" look the
@@ -5932,7 +7483,7 @@ function Format.round(n: number): string
 end
 
 return Format
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000046"><Properties><string name="Name">Motion</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000052"><Properties><string name="Name">Motion</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Motion.luau
 	Tiny animation helpers so panels don't just snap on/off. Uses a UIScale child
@@ -5980,7 +7531,7 @@ function Motion.toggle(frame: GuiObject)
 end
 
 return Motion
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000047"><Properties><string name="Name">Theme</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000053"><Properties><string name="Name">Theme</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Theme.luau
 	Design tokens for the whole interface. One place to restyle the game. Tuned
@@ -6032,5 +7583,5 @@ Theme.corner = UDim.new(0, 12)
 Theme.pad = 10
 
 return Theme
-</ProtectedString></Properties></Item></Item></Item></Item></Item><Item class="Workspace" referent="RBX00000054"><Properties><bool name="StreamingEnabled">true</bool></Properties></Item><Item class="Players" referent="RBX00000055"><Properties><bool name="CharacterAutoLoads">false</bool></Properties></Item>
+</ProtectedString></Properties></Item></Item></Item></Item></Item><Item class="Workspace" referent="RBX00000060"><Properties><bool name="StreamingEnabled">true</bool></Properties></Item><Item class="Players" referent="RBX00000061"><Properties><bool name="CharacterAutoLoads">false</bool></Properties></Item>
 </roblox>

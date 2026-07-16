@@ -104,10 +104,20 @@ function Modifiers.resolve(nation: Nation): Resolved
 		lawUpkeep += m.upkeep or 0
 	end
 
+	-- Each ally lifts influence generation; alliances are a diplomatic engine.
+	local allyCount = 0
+	if nation.diplomacy and nation.diplomacy.allies then
+		for _, active in nation.diplomacy.allies do
+			if active then
+				allyCount += 1
+			end
+		end
+	end
+
 	r.corruptionCreepMult *= (1 + techCreep)
 	r.researchBonusMult *= (1 + techResearch + lawResearch)
 	r.foodProductionMult += techFood + lawFood
-	r.influenceBonusMult *= (1 + techInfluence)
+	r.influenceBonusMult *= (1 + techInfluence + allyCount * 0.05)
 	r.upkeepMult += lawUpkeep
 
 	return r

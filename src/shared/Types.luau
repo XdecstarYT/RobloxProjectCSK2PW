@@ -72,6 +72,18 @@ export type Research = {
 	points: number, -- unspent research points
 }
 
+-- Standing armed forces. Unit counts; strength is derived from them + tech.
+export type Military = {
+	army: number,
+	navy: number,
+	air: number,
+}
+
+-- Foreign relations. `allies` maps another nation's id (as a string) to true.
+export type Diplomacy = {
+	allies: { [string]: boolean },
+}
+
 -- The full authoritative state for a single nation. This is what the server
 -- simulates, saves, and (in a filtered form) replicates to the owning client.
 export type Nation = {
@@ -84,6 +96,8 @@ export type Nation = {
 	politics: Politics,
 	economy: Economy,
 	research: Research,
+	military: Military,
+	diplomacy: Diplomacy,
 	territory: { regions: { string } },
 	flags: { [string]: boolean }, -- one-time event / tutorial markers
 }

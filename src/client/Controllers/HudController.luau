@@ -28,7 +28,7 @@ HudController._gui = nil :: ScreenGui?
 HudController._chips = {} :: { [string]: TextLabel }
 HudController._stats = {} :: { [string]: TextLabel }
 HudController._nameLabel = nil :: TextLabel?
-HudController._buttonBar = nil :: Frame?
+HudController._buttonBar = nil :: ScrollingFrame?
 
 -- ---- Builders -------------------------------------------------------------
 
@@ -114,7 +114,8 @@ function HudController:AddButton(text: string, onClick: () -> ()): TextButton
 	local button = Create("TextButton", {
 		AutoButtonColor = true,
 		BackgroundColor3 = Theme.color.panelLight,
-		Size = UDim2.fromOffset(120, 44),
+		AutomaticSize = Enum.AutomaticSize.X,
+		Size = UDim2.fromOffset(0, 44),
 		Font = Theme.font.bold,
 		Text = text,
 		TextColor3 = Theme.color.text,
@@ -122,6 +123,8 @@ function HudController:AddButton(text: string, onClick: () -> ()): TextButton
 		[Create.Children] = {
 			Create("UICorner", { CornerRadius = Theme.corner }),
 			Create("UIStroke", { Color = Theme.color.stroke, Thickness = 1 }),
+			Create("UIPadding", { PaddingLeft = UDim.new(0, 16), PaddingRight = UDim.new(0, 16) }),
+			Create("UISizeConstraint", { MinSize = Vector2.new(96, 44) }),
 		},
 		[Create.Event] = { Activated = onClick },
 	}) :: TextButton
@@ -229,23 +232,29 @@ function HudController:Init()
 	end
 	statsPanel.Parent = gui
 
-	-- Bottom action bar.
-	self._buttonBar = Create("Frame", {
+	-- Bottom action bar — a horizontal scroller so any number of buttons fits,
+	-- even on narrow mobile screens.
+	self._buttonBar = Create("ScrollingFrame", {
 		Name = "ActionBar",
 		AnchorPoint = Vector2.new(0.5, 1),
-		Position = UDim2.new(0.5, 0, 1, -16),
-		Size = UDim2.fromOffset(400, 44),
+		Position = UDim2.new(0.5, 0, 1, -14),
+		Size = UDim2.new(1, -32, 0, 48),
 		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollingDirection = Enum.ScrollingDirection.X,
+		ScrollBarThickness = 0,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.X,
 		[Create.Children] = {
 			Create("UIListLayout", {
 				FillDirection = Enum.FillDirection.Horizontal,
-				Padding = UDim.new(0, 10),
+				Padding = UDim.new(0, 8),
 				HorizontalAlignment = Enum.HorizontalAlignment.Center,
 				VerticalAlignment = Enum.VerticalAlignment.Center,
 				SortOrder = Enum.SortOrder.LayoutOrder,
 			}),
 		},
-	}) :: Frame
+	}) :: ScrollingFrame
 	self._buttonBar.Parent = gui
 
 	gui.Parent = playerGui

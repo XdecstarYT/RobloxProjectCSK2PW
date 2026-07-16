@@ -135,6 +135,8 @@ local function defaultNation(player: Player): Nation
 			progress = 0,
 			points = 0,
 		},
+		military = { army = 0, navy = 0, air = 0 },
+		diplomacy = { allies = {} },
 		territory = { regions = { "capital" } },
 		flags = {},
 	}
