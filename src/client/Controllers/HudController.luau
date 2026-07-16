@@ -16,6 +16,7 @@ local Constants = require(ReplicatedStorage.Nexus.Constants)
 local Resources = require(ReplicatedStorage.Nexus.Config.Resources)
 
 local Create = require(script.Parent.Parent.UI.Create)
+local Decor = require(script.Parent.Parent.UI.Decor)
 local Format = require(script.Parent.Parent.UI.Format)
 local Theme = require(script.Parent.Parent.UI.Theme)
 
@@ -63,6 +64,7 @@ local function resourceChip(resourceId: string): (Frame, TextLabel)
 			valueLabel,
 		},
 	}) :: Frame
+	Decor.gradient(chip, Theme.gradient.chip)
 
 	return chip, valueLabel
 end
@@ -123,6 +125,7 @@ function HudController:AddButton(text: string, onClick: () -> ()): TextButton
 		},
 		[Create.Event] = { Activated = onClick },
 	}) :: TextButton
+	Decor.gradient(button, Theme.gradient.chip)
 	button.Parent = bar
 	return button
 end
@@ -153,10 +156,24 @@ function HudController:Init()
 				HorizontalAlignment = Enum.HorizontalAlignment.Center,
 				SortOrder = Enum.SortOrder.LayoutOrder,
 			}),
-			Create("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }),
+			Create("UIPadding", { PaddingLeft = UDim.new(0, 96), PaddingRight = UDim.new(0, 8) }),
 		},
 	})
+	Decor.gradient(chipRow, Theme.gradient.topbar)
+	Create("UIStroke", { Color = Theme.color.stroke, Thickness = 1, Transparency = 0.4 }).Parent = chipRow
 	chipRow.Parent = gui
+
+	-- Wordmark in the top-left corner.
+	Create("TextLabel", {
+		BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(14, 0),
+		Size = UDim2.fromOffset(90, 50),
+		Font = Theme.font.black,
+		Text = "◆ NEXUS",
+		TextColor3 = Theme.color.accent,
+		TextSize = 18,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}).Parent = gui
 
 	for _, resourceId in Constants.RESOURCE_ORDER do
 		local chip, label = resourceChip(resourceId)
@@ -169,7 +186,7 @@ function HudController:Init()
 		BackgroundColor3 = Theme.color.panel,
 		BackgroundTransparency = 0.1,
 		Position = UDim2.fromOffset(16, 66),
-		Size = UDim2.fromOffset(220, 210),
+		Size = UDim2.fromOffset(224, 252),
 		[Create.Children] = {
 			Create("UICorner", { CornerRadius = Theme.corner }),
 			Create("UIStroke", { Color = Theme.color.stroke, Thickness = 1 }),
@@ -182,6 +199,7 @@ function HudController:Init()
 			Create("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }),
 		},
 	})
+	Decor.gradient(statsPanel, Theme.gradient.panel)
 
 	self._nameLabel = Create("TextLabel", {
 		BackgroundTransparency = 1,

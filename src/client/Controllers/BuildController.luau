@@ -24,7 +24,9 @@ local WorldGrid = require(ReplicatedStorage.Nexus.WorldGrid)
 local Buildings = require(ReplicatedStorage.Nexus.Config.Buildings)
 
 local Create = require(script.Parent.Parent.UI.Create)
+local Decor = require(script.Parent.Parent.UI.Decor)
 local Format = require(script.Parent.Parent.UI.Format)
+local Motion = require(script.Parent.Parent.UI.Motion)
 local Theme = require(script.Parent.Parent.UI.Theme)
 
 local BuildController = {
@@ -38,6 +40,7 @@ BuildController._placingKind = nil :: string?
 BuildController._placingRotation = 0
 BuildController._ghost = nil :: BasePart?
 BuildController._buttons = {} :: { { button: TextButton, kind: string } }
+BuildController._highlight = nil :: Highlight?
 
 -- ---- Helpers --------------------------------------------------------------
 
@@ -192,6 +195,7 @@ function BuildController:_buildMenu()
 		table.insert(self._buttons, { button = button, kind = kind })
 	end
 
+	Decor.gradient(panel, Theme.gradient.panel)
 	panel.Parent = gui
 	self._panel = panel
 
@@ -368,23 +372,50 @@ function BuildController:_pickBuildingUnderCursor(): string?
 	params.FilterDescendantsInstances = { WorldController:GetCityFolder() }
 	local result = Workspace:Raycast(ray.Origin, ray.Direction * 2000, params)
 	if result and result.Instance then
-		return result.Instance:GetAttribute("buildingId") :: string?
+		-- Walk up in case the ray hit a decorative child rather than the body.
+		local inst: Instance? = result.Instance
+		while inst and inst ~= Workspace do
+			local id = inst:GetAttribute("buildingId")
+			if id then
+				return id :: string
+			end
+			inst = inst.Parent
+		end
 	end
 	return nil
 end
 
 function BuildController:_clearSelection()
 	self._selectedId = nil
-	if self._selectionPanel then
-		self._selectionPanel.Visible = false
+	if self._highlight then
+		self._highlight.Adornee = nil
+	end
+	if self._selectionPanel and self._selectionPanel.Visible then
+		Motion.hide(self._selectionPanel)
 	end
 end
 
 function BuildController:_select(id: string)
+	local WorldController = require(script.Parent.WorldController)
 	self._selectedId = id
+
+	-- Outline the selected building in the world.
+	if not self._highlight then
+		local hl = Instance.new("Highlight")
+		hl.Name = "NexusSelection"
+		hl.FillColor = Theme.color.accent
+		hl.FillTransparency = 0.75
+		hl.OutlineColor = Theme.color.accent
+		hl.OutlineTransparency = 0
+		hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		hl.Parent = Workspace
+		self._highlight = hl
+	end
+	self._highlight.Adornee = WorldController:GetModel(id)
+
 	self:_refreshSelectionPanel()
-	if self._selectionPanel then
-		self._selectionPanel.Visible = true
+	if self._selectionPanel and not self._selectionPanel.Visible then
+		Motion.show(self._selectionPanel)
 	end
 end
 
@@ -492,6 +523,7 @@ function BuildController:_buildSelectionPanel()
 			}),
 		},
 	}) :: Frame
+	Decor.gradient(panel, Theme.gradient.panel)
 	panel.Parent = gui
 	self._selectionPanel = panel
 end
@@ -551,7 +583,7 @@ function BuildController:Start()
 			return
 		end
 		if self._panel then
-			self._panel.Visible = not self._panel.Visible
+			Motion.toggle(self._panel)
 		end
 	end)
 

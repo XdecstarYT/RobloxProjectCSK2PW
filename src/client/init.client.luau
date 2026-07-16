@@ -18,6 +18,7 @@ local Controllers = script.Controllers
 
 local ORDER = {
 	"StateController",
+	"AmbianceController",
 	"NotificationController",
 	"HudController",
 	"WorldController",

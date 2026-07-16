@@ -13,6 +13,7 @@ local Net = require(ReplicatedStorage.Nexus.Net)
 local NetRoutes = require(ReplicatedStorage.Nexus.NetRoutes)
 
 local Create = require(script.Parent.Parent.UI.Create)
+local Decor = require(script.Parent.Parent.UI.Decor)
 local Theme = require(script.Parent.Parent.UI.Theme)
 
 local NotificationController = {
@@ -61,6 +62,7 @@ local function buildToast(severity: string, title: string, body: string?): Frame
 			}) or nil,
 		},
 	}) :: Frame
+	Decor.gradient(toast, Theme.gradient.panel)
 
 	return toast
 end

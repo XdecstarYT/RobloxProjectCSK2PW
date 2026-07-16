@@ -3,7 +3,7 @@
 <Meta name="ExplicitAutoJoints">true</Meta>
 <External>null</External>
 <External>nil</External>
-<Item class="ReplicatedStorage" referent="RBX00000047"><Properties></Properties><Item class="Folder" referent="RBX00000017"><Properties><string name="Name">Nexus</string></Properties><Item class="ModuleScript" referent="RBX00000007"><Properties><string name="Name">Config</string><ProtectedString name="Source">--!strict
+<Item class="ReplicatedStorage" referent="RBX00000050"><Properties></Properties><Item class="Folder" referent="RBX00000017"><Properties><string name="Name">Nexus</string></Properties><Item class="ModuleScript" referent="RBX00000007"><Properties><string name="Name">Config</string><ProtectedString name="Source">--!strict
 --[[
 	Config/init.luau
 	Aggregates every configuration table behind one require. Because this folder
@@ -1665,7 +1665,7 @@ function WorldGrid.worldToTile(position: Vector3): (number, number)
 end
 
 return WorldGrid
-</ProtectedString></Properties></Item></Item></Item><Item class="ServerScriptService" referent="RBX00000048"><Properties></Properties><Item class="Script" referent="RBX00000031"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item></Item><Item class="ServerScriptService" referent="RBX00000051"><Properties></Properties><Item class="Script" referent="RBX00000031"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
 --[[
 	init.server.luau
 	Server bootstrap. Requires every service, registers it with the Framework,
@@ -3565,7 +3565,7 @@ function Validation.readPosition(payload: any): ({ x: number, z: number })?
 end
 
 return Validation
-</ProtectedString></Properties></Item></Item></Item></Item><Item class="StarterPlayer" referent="RBX00000050"><Properties></Properties><Item class="StarterPlayerScripts" referent="RBX00000049"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX00000046"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item></Item></Item><Item class="StarterPlayer" referent="RBX00000053"><Properties></Properties><Item class="StarterPlayerScripts" referent="RBX00000052"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX00000049"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
 --[[
 	init.client.luau
 	Client bootstrap. Registers every controller with the ClientFramework, then
@@ -3585,6 +3585,7 @@ local Controllers = script.Controllers
 
 local ORDER = {
 	"StateController",
+	"AmbianceController",
 	"NotificationController",
 	"HudController",
 	"WorldController",
@@ -3667,7 +3668,86 @@ function ClientFramework.start()
 end
 
 return ClientFramework
-</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000040"><Properties><string name="Name">Controllers</string></Properties><Item class="ModuleScript" referent="RBX00000033"><Properties><string name="Name">BuildController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000041"><Properties><string name="Name">Controllers</string></Properties><Item class="ModuleScript" referent="RBX00000033"><Properties><string name="Name">AmbianceController</string><ProtectedString name="Source">--!strict
+--[[
+	Controllers/AmbianceController.luau
+	Sets the mood: cinematic lighting, atmospheric depth and post-processing.
+	Configured at runtime on the client (lighting is client-rendered anyway), so
+	the look ships identically whether the game is opened from the place file or
+	synced with Rojo — no hand-authored Lighting in the tree required.
+
+	The target is a clean, warm late-afternoon over a stylized city: soft shadows,
+	a little haze for distance, gentle bloom on the neon accents, and a touch of
+	colour grading for contrast and life.
+]]
+
+local Lighting = game:GetService("Lighting")
+
+local AmbianceController = {
+	Name = "AmbianceController",
+}
+
+-- Fetch-or-create a single instance of `className` under `parent`.
+local function ensure(parent: Instance, className: string, name: string): Instance
+	local existing = parent:FindFirstChild(name)
+	if existing and existing.ClassName == className then
+		return existing
+	end
+	local inst = Instance.new(className)
+	inst.Name = name
+	inst.Parent = parent
+	return inst
+end
+
+function AmbianceController:Init()
+	-- Core lighting: Future technology for the best shadows and light bounce.
+	pcall(function()
+		Lighting.Technology = Enum.Technology.Future
+	end)
+	Lighting.ClockTime = 15.2
+	Lighting.GeographicLatitude = 24
+	Lighting.Brightness = 2.6
+	Lighting.ExposureCompensation = 0.15
+	Lighting.Ambient = Color3.fromRGB(64, 72, 90)
+	Lighting.OutdoorAmbient = Color3.fromRGB(126, 136, 158)
+	Lighting.ColorShift_Top = Color3.fromRGB(255, 236, 205)
+	Lighting.ColorShift_Bottom = Color3.fromRGB(120, 140, 170)
+	Lighting.ShadowSoftness = 0.5
+	Lighting.EnvironmentDiffuseScale = 1
+	Lighting.EnvironmentSpecularScale = 1
+	Lighting.GlobalShadows = true
+	Lighting.FogEnd = 100000 -- distance handled by Atmosphere, not legacy fog
+
+	-- Atmosphere: haze that fades distant tiles for a sense of scale.
+	local atmosphere = ensure(Lighting, "Atmosphere", "Atmosphere") :: Atmosphere
+	atmosphere.Density = 0.32
+	atmosphere.Offset = 0.15
+	atmosphere.Color = Color3.fromRGB(202, 212, 227)
+	atmosphere.Decay = Color3.fromRGB(104, 112, 128)
+	atmosphere.Glare = 0.25
+	atmosphere.Haze = 1.6
+
+	-- Bloom: makes the neon building accents glow.
+	local bloom = ensure(Lighting, "BloomEffect", "NexusBloom") :: BloomEffect
+	bloom.Intensity = 0.65
+	bloom.Size = 24
+	bloom.Threshold = 1.05
+
+	-- Sun rays for a hint of golden-hour warmth.
+	local sun = ensure(Lighting, "SunRaysEffect", "NexusSunRays") :: SunRaysEffect
+	sun.Intensity = 0.09
+	sun.Spread = 0.9
+
+	-- Colour grading: gentle contrast, saturation and a warm tint.
+	local grade = ensure(Lighting, "ColorCorrectionEffect", "NexusGrade") :: ColorCorrectionEffect
+	grade.Brightness = 0.0
+	grade.Contrast = 0.1
+	grade.Saturation = 0.14
+	grade.TintColor = Color3.fromRGB(255, 248, 240)
+end
+
+return AmbianceController
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000034"><Properties><string name="Name">BuildController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/BuildController.luau
 	Everything the player touches to shape their city:
@@ -3693,7 +3773,9 @@ local WorldGrid = require(ReplicatedStorage.Nexus.WorldGrid)
 local Buildings = require(ReplicatedStorage.Nexus.Config.Buildings)
 
 local Create = require(script.Parent.Parent.UI.Create)
+local Decor = require(script.Parent.Parent.UI.Decor)
 local Format = require(script.Parent.Parent.UI.Format)
+local Motion = require(script.Parent.Parent.UI.Motion)
 local Theme = require(script.Parent.Parent.UI.Theme)
 
 local BuildController = {
@@ -3707,6 +3789,7 @@ BuildController._placingKind = nil :: string?
 BuildController._placingRotation = 0
 BuildController._ghost = nil :: BasePart?
 BuildController._buttons = {} :: { { button: TextButton, kind: string } }
+BuildController._highlight = nil :: Highlight?
 
 -- ---- Helpers --------------------------------------------------------------
 
@@ -3861,6 +3944,7 @@ function BuildController:_buildMenu()
 		table.insert(self._buttons, { button = button, kind = kind })
 	end
 
+	Decor.gradient(panel, Theme.gradient.panel)
 	panel.Parent = gui
 	self._panel = panel
 
@@ -4037,23 +4121,50 @@ function BuildController:_pickBuildingUnderCursor(): string?
 	params.FilterDescendantsInstances = { WorldController:GetCityFolder() }
 	local result = Workspace:Raycast(ray.Origin, ray.Direction * 2000, params)
 	if result and result.Instance then
-		return result.Instance:GetAttribute("buildingId") :: string?
+		-- Walk up in case the ray hit a decorative child rather than the body.
+		local inst: Instance? = result.Instance
+		while inst and inst ~= Workspace do
+			local id = inst:GetAttribute("buildingId")
+			if id then
+				return id :: string
+			end
+			inst = inst.Parent
+		end
 	end
 	return nil
 end
 
 function BuildController:_clearSelection()
 	self._selectedId = nil
-	if self._selectionPanel then
-		self._selectionPanel.Visible = false
+	if self._highlight then
+		self._highlight.Adornee = nil
+	end
+	if self._selectionPanel and self._selectionPanel.Visible then
+		Motion.hide(self._selectionPanel)
 	end
 end
 
 function BuildController:_select(id: string)
+	local WorldController = require(script.Parent.WorldController)
 	self._selectedId = id
+
+	-- Outline the selected building in the world.
+	if not self._highlight then
+		local hl = Instance.new("Highlight")
+		hl.Name = "NexusSelection"
+		hl.FillColor = Theme.color.accent
+		hl.FillTransparency = 0.75
+		hl.OutlineColor = Theme.color.accent
+		hl.OutlineTransparency = 0
+		hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		hl.Parent = Workspace
+		self._highlight = hl
+	end
+	self._highlight.Adornee = WorldController:GetModel(id)
+
 	self:_refreshSelectionPanel()
-	if self._selectionPanel then
-		self._selectionPanel.Visible = true
+	if self._selectionPanel and not self._selectionPanel.Visible then
+		Motion.show(self._selectionPanel)
 	end
 end
 
@@ -4161,6 +4272,7 @@ function BuildController:_buildSelectionPanel()
 			}),
 		},
 	}) :: Frame
+	Decor.gradient(panel, Theme.gradient.panel)
 	panel.Parent = gui
 	self._selectionPanel = panel
 end
@@ -4220,7 +4332,7 @@ function BuildController:Start()
 			return
 		end
 		if self._panel then
-			self._panel.Visible = not self._panel.Visible
+			Motion.toggle(self._panel)
 		end
 	end)
 
@@ -4230,7 +4342,7 @@ function BuildController:Start()
 end
 
 return BuildController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000034"><Properties><string name="Name">HudController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000035"><Properties><string name="Name">HudController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/HudController.luau
 	The persistent HUD: a top resource bar, a compact national-stats panel, and a
@@ -4248,6 +4360,7 @@ local Constants = require(ReplicatedStorage.Nexus.Constants)
 local Resources = require(ReplicatedStorage.Nexus.Config.Resources)
 
 local Create = require(script.Parent.Parent.UI.Create)
+local Decor = require(script.Parent.Parent.UI.Decor)
 local Format = require(script.Parent.Parent.UI.Format)
 local Theme = require(script.Parent.Parent.UI.Theme)
 
@@ -4295,6 +4408,7 @@ local function resourceChip(resourceId: string): (Frame, TextLabel)
 			valueLabel,
 		},
 	}) :: Frame
+	Decor.gradient(chip, Theme.gradient.chip)
 
 	return chip, valueLabel
 end
@@ -4355,6 +4469,7 @@ function HudController:AddButton(text: string, onClick: () -&gt; ()): TextButton
 		},
 		[Create.Event] = { Activated = onClick },
 	}) :: TextButton
+	Decor.gradient(button, Theme.gradient.chip)
 	button.Parent = bar
 	return button
 end
@@ -4385,10 +4500,24 @@ function HudController:Init()
 				HorizontalAlignment = Enum.HorizontalAlignment.Center,
 				SortOrder = Enum.SortOrder.LayoutOrder,
 			}),
-			Create("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }),
+			Create("UIPadding", { PaddingLeft = UDim.new(0, 96), PaddingRight = UDim.new(0, 8) }),
 		},
 	})
+	Decor.gradient(chipRow, Theme.gradient.topbar)
+	Create("UIStroke", { Color = Theme.color.stroke, Thickness = 1, Transparency = 0.4 }).Parent = chipRow
 	chipRow.Parent = gui
+
+	-- Wordmark in the top-left corner.
+	Create("TextLabel", {
+		BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(14, 0),
+		Size = UDim2.fromOffset(90, 50),
+		Font = Theme.font.black,
+		Text = "◆ NEXUS",
+		TextColor3 = Theme.color.accent,
+		TextSize = 18,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}).Parent = gui
 
 	for _, resourceId in Constants.RESOURCE_ORDER do
 		local chip, label = resourceChip(resourceId)
@@ -4401,7 +4530,7 @@ function HudController:Init()
 		BackgroundColor3 = Theme.color.panel,
 		BackgroundTransparency = 0.1,
 		Position = UDim2.fromOffset(16, 66),
-		Size = UDim2.fromOffset(220, 210),
+		Size = UDim2.fromOffset(224, 252),
 		[Create.Children] = {
 			Create("UICorner", { CornerRadius = Theme.corner }),
 			Create("UIStroke", { Color = Theme.color.stroke, Thickness = 1 }),
@@ -4414,6 +4543,7 @@ function HudController:Init()
 			Create("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }),
 		},
 	})
+	Decor.gradient(statsPanel, Theme.gradient.panel)
 
 	self._nameLabel = Create("TextLabel", {
 		BackgroundTransparency = 1,
@@ -4529,7 +4659,7 @@ function HudController:Start()
 end
 
 return HudController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000035"><Properties><string name="Name">NotificationController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000036"><Properties><string name="Name">NotificationController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/NotificationController.luau
 	Renders transient server notifications as stacked toasts in the top-right.
@@ -4544,6 +4674,7 @@ local Net = require(ReplicatedStorage.Nexus.Net)
 local NetRoutes = require(ReplicatedStorage.Nexus.NetRoutes)
 
 local Create = require(script.Parent.Parent.UI.Create)
+local Decor = require(script.Parent.Parent.UI.Decor)
 local Theme = require(script.Parent.Parent.UI.Theme)
 
 local NotificationController = {
@@ -4592,6 +4723,7 @@ local function buildToast(severity: string, title: string, body: string?): Frame
 			}) or nil,
 		},
 	}) :: Frame
+	Decor.gradient(toast, Theme.gradient.panel)
 
 	return toast
 end
@@ -4663,7 +4795,7 @@ function NotificationController:Start()
 end
 
 return NotificationController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000036"><Properties><string name="Name">PoliticsController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000037"><Properties><string name="Name">PoliticsController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/PoliticsController.luau
 	The governance panel: adjust the tax rate, switch government type, and
@@ -4680,6 +4812,8 @@ local Governments = require(ReplicatedStorage.Nexus.Config.Governments)
 local Laws = require(ReplicatedStorage.Nexus.Config.Laws)
 
 local Create = require(script.Parent.Parent.UI.Create)
+local Decor = require(script.Parent.Parent.UI.Decor)
+local Motion = require(script.Parent.Parent.UI.Motion)
 local Theme = require(script.Parent.Parent.UI.Theme)
 
 local PoliticsController = {
@@ -4889,6 +5023,7 @@ function PoliticsController:_build()
 	}) :: Frame
 	-- Anchor the panel vertically centred but below the stats panel visually.
 	panel.Position = UDim2.new(0, 16, 0.5, 20)
+	Decor.gradient(panel, Theme.gradient.panel)
 	panel.Parent = gui
 	self._panel = panel
 end
@@ -4928,7 +5063,7 @@ function PoliticsController:Start()
 	self:_build()
 	HudController:AddButton("🏛 Politics", function()
 		if self._panel then
-			self._panel.Visible = not self._panel.Visible
+			Motion.toggle(self._panel)
 		end
 	end)
 
@@ -4941,7 +5076,7 @@ function PoliticsController:Start()
 end
 
 return PoliticsController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000037"><Properties><string name="Name">ResearchController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000038"><Properties><string name="Name">ResearchController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/ResearchController.luau
 	The technology panel. Lists every tech grouped by branch with a live status —
@@ -4956,7 +5091,9 @@ local NetRoutes = require(ReplicatedStorage.Nexus.NetRoutes)
 local Technologies = require(ReplicatedStorage.Nexus.Config.Technologies)
 
 local Create = require(script.Parent.Parent.UI.Create)
+local Decor = require(script.Parent.Parent.UI.Decor)
 local Format = require(script.Parent.Parent.UI.Format)
+local Motion = require(script.Parent.Parent.UI.Motion)
 local Theme = require(script.Parent.Parent.UI.Theme)
 
 local ResearchController = {
@@ -5101,6 +5238,7 @@ function ResearchController:_build()
 			content,
 		},
 	}) :: Frame
+	Decor.gradient(panel, Theme.gradient.panel)
 	panel.Parent = gui
 	self._panel = panel
 end
@@ -5170,7 +5308,7 @@ function ResearchController:Start()
 	self:_build()
 	HudController:AddButton("🔬 Research", function()
 		if self._panel then
-			self._panel.Visible = not self._panel.Visible
+			Motion.toggle(self._panel)
 		end
 	end)
 
@@ -5183,7 +5321,7 @@ function ResearchController:Start()
 end
 
 return ResearchController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000038"><Properties><string name="Name">StateController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000039"><Properties><string name="Name">StateController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/StateController.luau
 	The client's single source of truth for replicated nation state. It listens
@@ -5243,21 +5381,22 @@ function StateController:Init()
 end
 
 return StateController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000039"><Properties><string name="Name">WorldController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000040"><Properties><string name="Name">WorldController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/WorldController.luau
-	Builds the 3D city view: a ground plate, an RTS-style overhead camera you can
-	pan and zoom, and one part per building rendered from the replicated snapshot.
+	Builds the 3D city view: a stylized ground with a glowing district grid,
+	surrounding water, an RTS overhead camera you can pan and zoom, and a
+	multi-part model per building rendered from the replicated snapshot.
 
 	Visuals are intentionally client-side and non-authoritative — the server owns
-	the data; this controller only draws it. That keeps the network light and lets
-	the world be re-themed (or swapped for Toolbox models) without touching
-	gameplay code. Parts are tagged with a `buildingId` attribute so BuildController
-	can pick them for selection.
+	the data; this controller only draws it. Buildings are Models tagged with a
+	`buildingId` attribute so BuildController can pick them for selection. New
+	buildings fade in; power-starved ones read as faded and dim.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
@@ -5266,29 +5405,33 @@ local WorldGrid = require(ReplicatedStorage.Nexus.WorldGrid)
 
 local Theme = require(script.Parent.Parent.UI.Theme)
 
-local CATEGORY_COLOR: { [string]: Color3 } = {
-	Housing = Color3.fromRGB(120, 170, 235),
-	Power = Color3.fromRGB(240, 200, 90),
-	Food = Color3.fromRGB(140, 200, 110),
-	Industry = Color3.fromRGB(200, 140, 90),
-	Commerce = Color3.fromRGB(150, 210, 200),
-	Research = Color3.fromRGB(150, 130, 235),
-	Services = Color3.fromRGB(220, 150, 200),
-	Government = Color3.fromRGB(230, 230, 240),
+-- Per-category look: body colour/material, roof colour, and a neon accent.
+type Style = { body: Color3, material: Enum.Material, roof: Color3, accent: Color3 }
+local STYLE: { [string]: Style } = {
+	Housing = { body = Color3.fromRGB(96, 130, 180), material = Enum.Material.Concrete, roof = Color3.fromRGB(58, 80, 116), accent = Color3.fromRGB(120, 200, 255) },
+	Power = { body = Color3.fromRGB(120, 122, 130), material = Enum.Material.Metal, roof = Color3.fromRGB(78, 80, 88), accent = Color3.fromRGB(250, 205, 90) },
+	Food = { body = Color3.fromRGB(110, 158, 92), material = Enum.Material.Grass, roof = Color3.fromRGB(78, 116, 64), accent = Color3.fromRGB(150, 220, 120) },
+	Industry = { body = Color3.fromRGB(170, 120, 82), material = Enum.Material.Metal, roof = Color3.fromRGB(120, 82, 54), accent = Color3.fromRGB(240, 150, 70) },
+	Commerce = { body = Color3.fromRGB(86, 168, 160), material = Enum.Material.Glass, roof = Color3.fromRGB(52, 108, 104), accent = Color3.fromRGB(120, 230, 215) },
+	Research = { body = Color3.fromRGB(126, 108, 200), material = Enum.Material.Metal, roof = Color3.fromRGB(84, 70, 140), accent = Color3.fromRGB(170, 140, 255) },
+	Services = { body = Color3.fromRGB(196, 132, 176), material = Enum.Material.SmoothPlastic, roof = Color3.fromRGB(140, 90, 124), accent = Color3.fromRGB(240, 160, 210) },
+	Government = { body = Color3.fromRGB(216, 220, 230), material = Enum.Material.Marble, roof = Color3.fromRGB(150, 156, 170), accent = Color3.fromRGB(245, 205, 120) },
 }
+local DEFAULT_STYLE: Style =
+	{ body = Color3.fromRGB(170, 176, 188), material = Enum.Material.SmoothPlastic, roof = Color3.fromRGB(120, 126, 138), accent = Color3.fromRGB(200, 210, 230) }
 
 local WorldController = {
 	Name = "WorldController",
 }
 
-WorldController._parts = {} :: { [string]: BasePart }
+WorldController._parts = {} :: { [string]: Model }
 WorldController._cityFolder = nil :: Folder?
 WorldController._baseplate = nil :: BasePart?
 
 -- Camera state.
 WorldController._focus = Vector3.new(0, 0, 0)
-WorldController._distance = 180
-WorldController._pitch = math.rad(58)
+WorldController._distance = 190
+WorldController._pitch = math.rad(56)
 
 function WorldController:GetCityFolder(): Folder
 	return assert(self._cityFolder, "city folder not ready")
@@ -5298,28 +5441,86 @@ function WorldController:GetBaseplate(): BasePart
 	return assert(self._baseplate, "baseplate not ready")
 end
 
+--- The rendered Model for a building id, if it currently exists.
+function WorldController:GetModel(id: string): Model?
+	return self._parts[id]
+end
+
 -- ---- World construction ---------------------------------------------------
 
+local function makeAnchored(name: string): Part
+	local p = Instance.new("Part")
+	p.Name = name
+	p.Anchored = true
+	p.CanCollide = false
+	p.CastShadow = false
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	return p
+end
+
 function WorldController:_buildWorld()
-	local base = Instance.new("Part")
-	base.Name = "NexusGround"
-	base.Anchored = true
-	base.Size = Vector3.new(WorldGrid.SPAN, 1, WorldGrid.SPAN)
-	base.Position = Vector3.new(0, WorldGrid.GROUND_Y - 0.5, 0)
-	base.Color = Color3.fromRGB(38, 46, 42)
-	base.Material = Enum.Material.Grass
-	base.TopSurface = Enum.SurfaceType.Smooth
+	-- Surrounding water for context and reflection.
+	local ocean = makeAnchored("NexusOcean")
+	ocean.Size = Vector3.new(WorldGrid.SPAN * 5, 4, WorldGrid.SPAN * 5)
+	ocean.Position = Vector3.new(0, -3.2, 0)
+	ocean.Material = Enum.Material.Water
+	ocean.Color = Color3.fromRGB(30, 58, 92)
+	ocean.Transparency = 0.1
+	ocean.Parent = Workspace
+
+	-- The buildable land plate.
+	local base = makeAnchored("NexusGround")
+	base.CanCollide = true
+	base.CanQuery = true
+	base.Size = Vector3.new(WorldGrid.SPAN, 2, WorldGrid.SPAN)
+	base.Position = Vector3.new(0, WorldGrid.GROUND_Y - 1, 0)
+	base.Color = Color3.fromRGB(48, 56, 60)
+	base.Material = Enum.Material.Slate
 	base.Parent = Workspace
-
-	-- A subtle border so the buildable area reads as a defined territory.
-	local border = Instance.new("SelectionBox")
-	border.Adornee = base
-	border.Color3 = Theme.color.accentDim
-	border.LineThickness = 0.2
-	border.Transparency = 0.4
-	border.Parent = base
-
 	self._baseplate = base
+
+	-- A glowing district grid every few tiles reads as a planned city.
+	local step = 8
+	local half = WorldGrid.SPAN / 2
+	local gridColor = Theme.color.accentDim
+	for i = 0, WorldGrid.GRID_SIZE, step do
+		local offset = -half + i * WorldGrid.STUDS
+		for _, axis in { "x", "z" } do
+			local line = makeAnchored("Grid")
+			line.Material = Enum.Material.Neon
+			line.Color = gridColor
+			line.Transparency = 0.62
+			line.CanQuery = false
+			if axis == "x" then
+				line.Size = Vector3.new(0.35, 0.2, WorldGrid.SPAN)
+				line.Position = Vector3.new(offset, 0.06, 0)
+			else
+				line.Size = Vector3.new(WorldGrid.SPAN, 0.2, 0.35)
+				line.Position = Vector3.new(0, 0.06, offset)
+			end
+			line.Parent = base
+		end
+	end
+
+	-- A brighter neon frame around the whole territory.
+	for _, spec in
+		{
+			{ s = Vector3.new(WorldGrid.SPAN, 0.5, 0.8), p = Vector3.new(0, 0.1, -half) },
+			{ s = Vector3.new(WorldGrid.SPAN, 0.5, 0.8), p = Vector3.new(0, 0.1, half) },
+			{ s = Vector3.new(0.8, 0.5, WorldGrid.SPAN), p = Vector3.new(-half, 0.1, 0) },
+			{ s = Vector3.new(0.8, 0.5, WorldGrid.SPAN), p = Vector3.new(half, 0.1, 0) },
+		}
+	do
+		local edge = makeAnchored("Border")
+		edge.Material = Enum.Material.Neon
+		edge.Color = Theme.color.accent
+		edge.Transparency = 0.25
+		edge.CanQuery = false
+		edge.Size = spec.s
+		edge.Position = spec.p
+		edge.Parent = base
+	end
 
 	local folder = Instance.new("Folder")
 	folder.Name = "NexusCity"
@@ -5335,6 +5536,7 @@ function WorldController:_setupCamera()
 	end
 	local camera = Workspace.CurrentCamera
 	camera.CameraType = Enum.CameraType.Scriptable
+	camera.FieldOfView = 55
 
 	local dragging = false
 	local lastPos: Vector2? = nil
@@ -5368,7 +5570,7 @@ function WorldController:_setupCamera()
 
 	UserInputService.InputChanged:Connect(function(input, gameProcessed)
 		if input.UserInputType == Enum.UserInputType.MouseWheel then
-			self._distance = math.clamp(self._distance - input.Position.Z * 18, 60, 400)
+			self._distance = math.clamp(self._distance - input.Position.Z * 18, 60, 420)
 		elseif dragging and lastPos and
 			(input.UserInputType == Enum.UserInputType.MouseMovement
 				or input.UserInputType == Enum.UserInputType.Touch)
@@ -5380,13 +5582,11 @@ function WorldController:_setupCamera()
 			local delta = pos - lastPos
 			lastPos = pos
 			local speed = self._distance / 600
-			-- Screen-drag pans the focus across the ground plane.
 			self._focus += Vector3.new(-delta.X * speed, 0, -delta.Y * speed)
 		end
 	end)
 
 	RunService:BindToRenderStep("NexusCamera", Enum.RenderPriority.Camera.Value, function()
-		-- Keyboard panning (PC).
 		local move = Vector3.zero
 		if UserInputService:IsKeyDown(Enum.KeyCode.W) then
 			move += Vector3.new(0, 0, -1)
@@ -5403,7 +5603,6 @@ function WorldController:_setupCamera()
 		if move.Magnitude &gt; 0 then
 			self._focus += move.Unit * (self._distance * 0.02)
 		end
-		-- Keep the focus over the map.
 		local lim = WorldGrid.SPAN / 2
 		self._focus = Vector3.new(
 			math.clamp(self._focus.X, -lim, lim),
@@ -5416,17 +5615,110 @@ end
 
 -- ---- Building rendering ----------------------------------------------------
 
-local function makePart(): BasePart
-	local part = Instance.new("Part")
-	part.Anchored = true
-	part.TopSurface = Enum.SurfaceType.Smooth
-	part.BottomSurface = Enum.SurfaceType.Smooth
-	part.Material = Enum.Material.SmoothPlastic
-	return part
+local function orientedFootprint(def: any, rotation: number): (number, number)
+	local w, h = def.footprint.w, def.footprint.h
+	if rotation == 90 or rotation == 270 then
+		return h, w
+	end
+	return w, h
+end
+
+-- Construct the model for one building at its final transform.
+function WorldController:_buildModel(building: any): Model
+	local def = Buildings[building.kind]
+	local style = STYLE[def.category] or DEFAULT_STYLE
+	local w, h = orientedFootprint(def, building.rotation)
+	local footW = w * WorldGrid.STUDS
+	local footH = h * WorldGrid.STUDS
+	local bodyHeight = 4 + building.level * 2.6
+	local center = WorldGrid.footprintCenter(building.position.x, building.position.z, w, h)
+
+	local model = Instance.new("Model")
+	model.Name = "Building_" .. building.id
+	model:SetAttribute("buildingId", building.id)
+	model:SetAttribute("level", building.level)
+	model:SetAttribute("rot", building.rotation)
+
+	-- Body.
+	local body = Instance.new("Part")
+	body.Name = "Body"
+	body.Anchored = true
+	body.CanCollide = false
+	body.TopSurface = Enum.SurfaceType.Smooth
+	body.BottomSurface = Enum.SurfaceType.Smooth
+	body.Material = style.material
+	body.Color = style.body
+	body.Size = Vector3.new(footW * 0.86, bodyHeight, footH * 0.86)
+	body.Position = center + Vector3.new(0, bodyHeight / 2, 0)
+	body:SetAttribute("buildingId", building.id)
+	body.Parent = model
+
+	-- Roof cap.
+	local roof = Instance.new("Part")
+	roof.Name = "Roof"
+	roof.Anchored = true
+	roof.CanCollide = false
+	roof.TopSurface = Enum.SurfaceType.Smooth
+	roof.BottomSurface = Enum.SurfaceType.Smooth
+	roof.Material = Enum.Material.Concrete
+	roof.Color = style.roof
+	roof.Size = Vector3.new(footW * 0.92, 1.2, footH * 0.92)
+	roof.Position = center + Vector3.new(0, bodyHeight + 0.6, 0)
+	roof:SetAttribute("buildingId", building.id)
+	roof.Parent = model
+
+	-- Neon accent ring near the top — glows under bloom.
+	local accent = Instance.new("Part")
+	accent.Name = "Accent"
+	accent.Anchored = true
+	accent.CanCollide = false
+	accent.CanQuery = false
+	accent.Material = Enum.Material.Neon
+	accent.Color = style.accent
+	accent.Size = Vector3.new(footW * 0.9, 0.5, footH * 0.9)
+	accent.Position = center + Vector3.new(0, bodyHeight - 1.2, 0)
+	accent.Parent = model
+
+	-- A second accent band for taller buildings.
+	if building.level &gt;= 3 then
+		local band = accent:Clone()
+		band.Name = "Accent2"
+		band.Position = center + Vector3.new(0, bodyHeight * 0.55, 0)
+		band.Parent = model
+	end
+
+	model.PrimaryPart = body
+	model.Parent = self:GetCityFolder()
+
+	-- Fade-in.
+	for _, part in model:GetChildren() do
+		if part:IsA("BasePart") then
+			local target = part.Transparency
+			part.Transparency = 1
+			TweenService:Create(part, TweenInfo.new(0.35, Enum.EasingStyle.Quad), {
+				Transparency = target,
+			}):Play()
+		end
+	end
+
+	return model
+end
+
+-- Fade a building for its power/condition state without rebuilding it.
+local function setActive(model: Model, active: boolean)
+	for _, part in model:GetChildren() do
+		if not part:IsA("BasePart") then
+			continue
+		end
+		if part.Name == "Accent" or part.Name == "Accent2" then
+			part.Transparency = active and 0 or 0.8
+		else
+			part.Transparency = active and 0 or 0.55
+		end
+	end
 end
 
 function WorldController:_syncBuildings(nation: any)
-	local folder = self:GetCityFolder()
 	local seen: { [string]: boolean } = {}
 
 	for id, building in nation.buildings do
@@ -5436,31 +5728,23 @@ function WorldController:_syncBuildings(nation: any)
 		end
 		seen[id] = true
 
-		local rot = building.rotation
-		local w, h = def.footprint.w, def.footprint.h
-		if rot == 90 or rot == 270 then
-			w, h = h, w
+		local model = self._parts[id]
+		local fresh = not model
+			or model:GetAttribute("level") ~= building.level
+			or model:GetAttribute("rot") ~= building.rotation
+		if fresh then
+			if model then
+				model:Destroy()
+			end
+			model = self:_buildModel(building)
+			self._parts[id] = model
 		end
-		local height = 4 + building.level * 2.5
-		local center = WorldGrid.footprintCenter(building.position.x, building.position.z, w, h)
-
-		local part = self._parts[id]
-		if not part then
-			part = makePart()
-			part:SetAttribute("buildingId", id)
-			part.Parent = folder
-			self._parts[id] = part
-		end
-		part.Size = Vector3.new(w * WorldGrid.STUDS * 0.9, height, h * WorldGrid.STUDS * 0.9)
-		part.Position = center + Vector3.new(0, height / 2, 0)
-		part.Color = CATEGORY_COLOR[def.category] or Color3.fromRGB(180, 180, 180)
-		-- Derelict / offline buildings read as faded.
-		part.Transparency = building.active and 0 or 0.5
+		setActive(model, building.active ~= false)
 	end
 
-	for id, part in self._parts do
+	for id, model in self._parts do
 		if not seen[id] then
-			part:Destroy()
+			model:Destroy()
 			self._parts[id] = nil
 		end
 	end
@@ -5482,7 +5766,7 @@ function WorldController:Start()
 end
 
 return WorldController
-</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000045"><Properties><string name="Name">UI</string></Properties><Item class="Folder" referent="RBX00000041"><Properties><string name="Name">Components</string></Properties></Item><Item class="ModuleScript" referent="RBX00000042"><Properties><string name="Name">Create</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000048"><Properties><string name="Name">UI</string></Properties><Item class="Folder" referent="RBX00000042"><Properties><string name="Name">Components</string></Properties></Item><Item class="ModuleScript" referent="RBX00000043"><Properties><string name="Name">Create</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Create.luau
 	A tiny declarative helper for building Instance trees without the noise of
@@ -5542,7 +5826,75 @@ local callable = setmetatable(Create, {
 
 -- The `any` cast lets callers use both `Create("Frame")` and `Create.Children`.
 return (callable :: any) :: (((className: string, props: { [any]: any }?) -&gt; Instance) &amp; typeof(Create))
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000043"><Properties><string name="Name">Format</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000044"><Properties><string name="Name">Decor</string><ProtectedString name="Source">--!strict
+--[[
+	UI/Decor.luau
+	Small cosmetic helpers so every panel, chip and button gets the same finish
+	without repeating boilerplate. Purely presentational — safe to apply to any
+	GuiObject after it is built.
+]]
+
+local Theme = require(script.Parent.Theme)
+
+local Decor = {}
+
+--- Apply a vertical gradient to a GuiObject's background. `pair` is a
+--- `{ topColor, bottomColor }` from Theme.gradient.
+function Decor.gradient(instance: GuiObject, pair: { Color3 }, rotation: number?)
+	local existing = instance:FindFirstChildOfClass("UIGradient")
+	local grad = existing or Instance.new("UIGradient")
+	grad.Color = ColorSequence.new(pair[1], pair[2])
+	grad.Rotation = rotation or 90
+	grad.Parent = instance
+	return grad
+end
+
+--- Standard panel finish: rounded corners, gradient body and a hairline stroke.
+--- Idempotent — only adds what is missing.
+function Decor.panel(frame: GuiObject)
+	if not frame:FindFirstChildOfClass("UICorner") then
+		local c = Instance.new("UICorner")
+		c.CornerRadius = Theme.corner
+		c.Parent = frame
+	end
+	if not frame:FindFirstChildOfClass("UIStroke") then
+		local s = Instance.new("UIStroke")
+		s.Color = Theme.color.stroke
+		s.Thickness = 1
+		s.Transparency = 0.15
+		s.Parent = frame
+	end
+	Decor.gradient(frame, Theme.gradient.panel)
+	return frame
+end
+
+--- A faux drop shadow: a soft, offset rounded frame placed behind `frame` in the
+--- same parent. Cheap and asset-free. Returns the shadow frame.
+function Decor.shadow(frame: GuiObject): Frame
+	local shadow = Instance.new("Frame")
+	shadow.Name = frame.Name .. "_Shadow"
+	shadow.BackgroundColor3 = Color3.new(0, 0, 0)
+	shadow.BackgroundTransparency = 0.55
+	shadow.AnchorPoint = frame.AnchorPoint
+	shadow.Position = frame.Position + UDim2.fromOffset(0, 6)
+	shadow.Size = frame.Size + UDim2.fromOffset(10, 12)
+	shadow.ZIndex = frame.ZIndex - 1
+	local c = Instance.new("UICorner")
+	c.CornerRadius = Theme.corner
+	c.Parent = shadow
+	local grad = Instance.new("UIGradient")
+	grad.Rotation = 90
+	grad.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.35),
+		NumberSequenceKeypoint.new(1, 0.85),
+	})
+	grad.Parent = shadow
+	shadow.Parent = frame.Parent
+	return shadow
+end
+
+return Decor
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000045"><Properties><string name="Name">Format</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Format.luau
 	Number/text formatting shared by every panel, so "12.3k" and "+4.5%" look the
@@ -5580,34 +5932,93 @@ function Format.round(n: number): string
 end
 
 return Format
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000044"><Properties><string name="Name">Theme</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000046"><Properties><string name="Name">Motion</string><ProtectedString name="Source">--!strict
+--[[
+	UI/Motion.luau
+	Tiny animation helpers so panels don't just snap on/off. Uses a UIScale child
+	for a subtle pop and a background fade, keeping call sites to one line.
+]]
+
+local TweenService = game:GetService("TweenService")
+
+local Motion = {}
+
+local SHOW = TweenInfo.new(0.18, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+local HIDE = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+
+local function scaleOf(frame: GuiObject): UIScale
+	local s = frame:FindFirstChildOfClass("UIScale")
+	if not s then
+		s = Instance.new("UIScale")
+		s.Parent = frame
+	end
+	return s
+end
+
+function Motion.show(frame: GuiObject)
+	local s = scaleOf(frame)
+	s.Scale = 0.92
+	frame.Visible = true
+	TweenService:Create(s, SHOW, { Scale = 1 }):Play()
+end
+
+function Motion.hide(frame: GuiObject)
+	local s = scaleOf(frame)
+	local tween = TweenService:Create(s, HIDE, { Scale = 0.94 })
+	tween:Play()
+	tween.Completed:Once(function()
+		frame.Visible = false
+	end)
+end
+
+function Motion.toggle(frame: GuiObject)
+	if frame.Visible then
+		Motion.hide(frame)
+	else
+		Motion.show(frame)
+	end
+end
+
+return Motion
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000047"><Properties><string name="Name">Theme</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Theme.luau
-	Design tokens for the whole interface. One place to restyle the game. Colours
-	are chosen for a dark, modern strategy dashboard with strong contrast so the
-	HUD stays legible on PC, mobile and console.
+	Design tokens for the whole interface. One place to restyle the game. Tuned
+	for a modern, cinematic strategy dashboard: deep navy chrome, a cyan-blue
+	primary, a warm gold secondary, and gradient pairs used across panels, chips
+	and buttons so the UI reads as one system.
 ]]
 
 local Theme = {}
 
 Theme.color = {
-	bg = Color3.fromRGB(18, 21, 28),
-	panel = Color3.fromRGB(26, 30, 40),
-	panelLight = Color3.fromRGB(36, 42, 55),
-	stroke = Color3.fromRGB(52, 60, 78),
-	accent = Color3.fromRGB(90, 150, 255),
-	accentDim = Color3.fromRGB(58, 96, 168),
-	text = Color3.fromRGB(232, 238, 248),
-	textDim = Color3.fromRGB(150, 160, 178),
-	good = Color3.fromRGB(92, 210, 116),
-	warn = Color3.fromRGB(240, 190, 70),
-	bad = Color3.fromRGB(238, 96, 96),
+	bg = Color3.fromRGB(13, 17, 28),
+	panel = Color3.fromRGB(23, 28, 43),
+	panelLight = Color3.fromRGB(33, 40, 57),
+	stroke = Color3.fromRGB(52, 63, 88),
+	accent = Color3.fromRGB(79, 168, 255),
+	accent2 = Color3.fromRGB(245, 196, 107),
+	accentDim = Color3.fromRGB(46, 92, 153),
+	text = Color3.fromRGB(234, 241, 251),
+	textDim = Color3.fromRGB(138, 151, 173),
+	good = Color3.fromRGB(70, 208, 138),
+	warn = Color3.fromRGB(243, 180, 81),
+	bad = Color3.fromRGB(240, 101, 95),
+}
+
+-- Gradient pairs (top -&gt; bottom) used by UI/Decor.
+Theme.gradient = {
+	panel = { Color3.fromRGB(30, 38, 56), Color3.fromRGB(19, 24, 37) },
+	chip = { Color3.fromRGB(41, 50, 70), Color3.fromRGB(28, 34, 49) },
+	accent = { Color3.fromRGB(93, 178, 255), Color3.fromRGB(62, 123, 214) },
+	topbar = { Color3.fromRGB(20, 26, 41), Color3.fromRGB(12, 16, 26) },
 }
 
 Theme.font = {
 	regular = Enum.Font.Gotham,
 	medium = Enum.Font.GothamMedium,
 	bold = Enum.Font.GothamBold,
+	black = Enum.Font.GothamBlack,
 }
 
 Theme.severityColor = {
@@ -5617,9 +6028,9 @@ Theme.severityColor = {
 	error = Theme.color.bad,
 }
 
-Theme.corner = UDim.new(0, 10)
+Theme.corner = UDim.new(0, 12)
 Theme.pad = 10
 
 return Theme
-</ProtectedString></Properties></Item></Item></Item></Item></Item><Item class="Workspace" referent="RBX00000051"><Properties><bool name="StreamingEnabled">true</bool></Properties></Item><Item class="Players" referent="RBX00000052"><Properties><bool name="CharacterAutoLoads">false</bool></Properties></Item>
+</ProtectedString></Properties></Item></Item></Item></Item></Item><Item class="Workspace" referent="RBX00000054"><Properties><bool name="StreamingEnabled">true</bool></Properties></Item><Item class="Players" referent="RBX00000055"><Properties><bool name="CharacterAutoLoads">false</bool></Properties></Item>
 </roblox>

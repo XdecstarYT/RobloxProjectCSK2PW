@@ -13,7 +13,9 @@ local NetRoutes = require(ReplicatedStorage.Nexus.NetRoutes)
 local Technologies = require(ReplicatedStorage.Nexus.Config.Technologies)
 
 local Create = require(script.Parent.Parent.UI.Create)
+local Decor = require(script.Parent.Parent.UI.Decor)
 local Format = require(script.Parent.Parent.UI.Format)
+local Motion = require(script.Parent.Parent.UI.Motion)
 local Theme = require(script.Parent.Parent.UI.Theme)
 
 local ResearchController = {
@@ -158,6 +160,7 @@ function ResearchController:_build()
 			content,
 		},
 	}) :: Frame
+	Decor.gradient(panel, Theme.gradient.panel)
 	panel.Parent = gui
 	self._panel = panel
 end
@@ -227,7 +230,7 @@ function ResearchController:Start()
 	self:_build()
 	HudController:AddButton("🔬 Research", function()
 		if self._panel then
-			self._panel.Visible = not self._panel.Visible
+			Motion.toggle(self._panel)
 		end
 	end)
 
