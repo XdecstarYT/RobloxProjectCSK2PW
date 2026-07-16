@@ -37,6 +37,7 @@ local NetRoutes = {
 	NOTIFY = "state/notify",
 	TRADE_INBOX = "diplomacy/inbox",
 	WORLD_SYNC = "world/sync",
+	TERRITORY_SYNC = "territory/sync",
 }
 
 return NetRoutes

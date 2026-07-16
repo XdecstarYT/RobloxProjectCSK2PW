@@ -27,6 +27,8 @@ local ORDER = {
 	"PoliticsController",
 	"ResearchController",
 	"DiplomacyController",
+	"TerritoryController",
+	"MilitaryController",
 	"LeaderboardController",
 }
 

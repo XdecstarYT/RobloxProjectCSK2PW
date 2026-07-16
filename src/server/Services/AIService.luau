@@ -18,10 +18,17 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Logger = require(ReplicatedStorage.Nexus.Logger)
 local ResourceMath = require(ReplicatedStorage.Nexus.ResourceMath)
 local Types = require(ReplicatedStorage.Nexus.Types)
+local Regions = require(ReplicatedStorage.Nexus.Config.Regions)
 local Technologies = require(ReplicatedStorage.Nexus.Config.Technologies)
 
 local DiplomacyService = require(script.Parent.DiplomacyService)
+local TerritoryService = require(script.Parent.TerritoryService)
 local WorldService = require(script.Parent.WorldService)
+
+local REGION_IDS = {}
+for regionId in Regions do
+	table.insert(REGION_IDS, regionId)
+end
 
 type Nation = Types.Nation
 
@@ -170,6 +177,17 @@ function AIService:_grow(id: number, nation: Nation, profile: Profile)
 		nation.resources.money -= 4000
 		local branch = ({ "army", "navy", "air" })[math.random(1, 3)]
 		nation.military[branch] += 1
+	end
+
+	-- Territory bonuses from owned regions, and the occasional expansion.
+	for _, regionId in nation.territory.regions do
+		local region = Regions[regionId]
+		if region then
+			ResourceMath.grant(nation.resources, region.bonus)
+		end
+	end
+	if math.random() < 0.08 and #REGION_IDS > 0 then
+		TerritoryService:ClaimForNation(id, REGION_IDS[math.random(1, #REGION_IDS)])
 	end
 
 	-- Gentle political drift keeps their stats lively.

@@ -5,9 +5,8 @@ grand-strategy / city-builder / nation-simulator for Roblox: build cities, run a
 economy, govern a populace, research technology, and steer your nation's politics
 — every decision feeding back into the simulation.
 
-This repository contains a **production-ready Phase 1 foundation**: the full
-engine plus a working, end-to-end gameplay vertical slice. It is real,
-non-placeholder Luau — the systems below run and interact today.
+This repository contains the **full game**: the engine plus every gameplay
+system, all real, non-placeholder Luau that runs and interacts today.
 
 ---
 
@@ -18,17 +17,24 @@ non-placeholder Luau — the systems below run and interact today.
 | **Server framework** | ✅ | Two-phase Init/Start service locator, no circular requires |
 | **Secure networking** | ✅ | One guarded gateway, per-player/route token-bucket rate limiting, uniform result envelope |
 | **Data persistence** | ✅ | Session locking, autosave, reconciliation, migration, retries+backoff, backups, Studio in-memory fallback |
-| **Economy** | ✅ | GDP, taxation, treasury, debt & interest, inflation, materials/food/power balances |
+| **Economy** | ✅ | GDP, taxes, treasury, debt & interest, inflation, materials/food/power, military upkeep, region income |
 | **City building** | ✅ | Server-authoritative place / upgrade / demolish / repair on a grid, with footprints & power |
 | **Citizens** | ✅ | Population, employment, happiness, education, health, unrest, migration |
 | **Politics** | ✅ | Tax, 7 government types, toggleable laws, approval/stability/corruption, elections |
-| **Research** | ✅ | Prerequisite-gated tech tree with global modifiers |
-| **Client UI** | ✅ | HUD, build menu with ghost placement, politics & research panels, toast notifications |
-| **3D world** | ✅ | RTS camera (pan/zoom, PC + touch), client-rendered city from the replicated snapshot |
+| **Research** | ✅ | Prerequisite-gated tech tree (incl. military branch) with global modifiers |
+| **Diplomacy & trade** | ✅ | Escrowed resource-for-resource trades, alliances, inbox, offer expiry (players + AI) |
+| **AI nations** | ✅ | Five rivals with strategy archetypes; grow, research, expand, trade & ally |
+| **Territory** | ✅ | Shared world map; claim regions with influence (adjacency + scaling cost); per-region income |
+| **Military (optional)** | ✅ | Recruit army/navy/air, upkeep, strength; forceful expansion vs AI; gated by a server setting |
+| **World events** | ✅ | Periodic national events and rarer global events with real consequences |
+| **Leaderboard** | ✅ | Live global power ranking of every nation (players + AI) |
+| **Client UI** | ✅ | HUD plus panels for build, politics, research, diplomacy, territory, military & ranks |
+| **3D world** | ✅ | Cinematic lighting/atmosphere, stylized neon city, RTS camera (pan/zoom, PC + touch) |
+| **Onboarding** | ✅ | First-join tutorial tips, guarded by a persisted flag |
 
-Diplomacy, military, AI nations, territory expansion and multiplayer trading are
-**designed and scaffolded** (routes reserved, data shapes defined) for later
-phases — see [`docs/ROADMAP.md`](docs/ROADMAP.md).
+Every important system is original, server-authoritative code. See
+[`docs/ROADMAP.md`](docs/ROADMAP.md) for build history and future ideas, and
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the data flow and security model.
 
 ---
 

@@ -140,4 +140,28 @@ define({
 	modifiers = { influenceBonus = 0.20 },
 })
 
+-- ---- Military branch ------------------------------------------------------
+
+define({
+	id = "military_1",
+	displayName = "Naval Command",
+	branch = "Military",
+	description = "Unlocks naval fleets for your armed forces.",
+	cost = 80,
+	requires = { "industry_1" },
+	unlocksBuildings = {},
+	modifiers = {},
+})
+
+define({
+	id = "military_2",
+	displayName = "Air Command",
+	branch = "Military",
+	description = "Unlocks air wings — your strongest units.",
+	cost = 130,
+	requires = { "military_1", "computing_1" },
+	unlocksBuildings = {},
+	modifiers = {},
+})
+
 return Technologies

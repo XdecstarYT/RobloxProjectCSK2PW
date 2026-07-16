@@ -13,6 +13,9 @@ local Config = {
 	Technologies = require(script.Technologies),
 	Governments = require(script.Governments),
 	Laws = require(script.Laws),
+	Regions = require(script.Regions),
+	MilitaryUnits = require(script.MilitaryUnits),
+	ServerSettings = require(script.ServerSettings),
 }
 
 return Config

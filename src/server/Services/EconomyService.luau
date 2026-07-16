@@ -16,8 +16,11 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Constants = require(ReplicatedStorage.Nexus.Constants)
 local Logger = require(ReplicatedStorage.Nexus.Logger)
+local ResourceMath = require(ReplicatedStorage.Nexus.ResourceMath)
 local Types = require(ReplicatedStorage.Nexus.Types)
 local Balance = require(ReplicatedStorage.Nexus.Config.Balance)
+local Regions = require(ReplicatedStorage.Nexus.Config.Regions)
+local MilitaryUnits = require(ReplicatedStorage.Nexus.Config.MilitaryUnits)
 
 local CityService = require(script.Parent.CityService)
 local DataService = require(script.Parent.DataService)
@@ -81,7 +84,14 @@ function EconomyService:Tick(nation: Nation): any
 	local interest = nation.economy.debt > 0
 			and nation.economy.debt * (nation.economy.interestRate / 100) / eco.ticksPerYear
 		or 0
-	local expense = stats.upkeep.money + interest
+
+	-- Standing forces draw money upkeep every tick.
+	local milUpkeep = 0
+	for branch, def in MilitaryUnits do
+		milUpkeep += (nation.military[branch] or 0) * def.upkeep
+	end
+
+	local expense = stats.upkeep.money + interest + milUpkeep
 
 	res.money += income
 	res.money -= expense
@@ -111,6 +121,14 @@ function EconomyService:Tick(nation: Nation): any
 	res.research += stats.production.research
 	res.influence += stats.production.influence
 	res.energy = stats.powerNet
+
+	-- Territory bonuses from every owned map region.
+	for _, regionId in nation.territory.regions do
+		local region = Regions[regionId]
+		if region then
+			ResourceMath.grant(res, region.bonus)
+		end
+	end
 
 	-- Inflation drifts toward target under money-supply pressure.
 	local pressure = (income - expense) / math.max(gdp, 1)

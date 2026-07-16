@@ -27,7 +27,11 @@ local ORDER = {
 	"ResearchService",
 	"PoliticsService",
 	"DiplomacyService",
+	"TerritoryService",
+	"MilitaryService",
 	"AIService",
+	"EventService",
+	"OnboardingService",
 }
 
 for _, name in ORDER do
