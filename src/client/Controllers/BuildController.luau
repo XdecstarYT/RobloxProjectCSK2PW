@@ -41,8 +41,21 @@ BuildController._placingRotation = 0
 BuildController._ghost = nil :: BasePart?
 BuildController._buttons = {} :: { { button: TextButton, kind: string } }
 BuildController._highlight = nil :: Highlight?
+BuildController._placeBar = nil :: Frame?
+BuildController._reticle = nil :: Frame?
 
 -- ---- Helpers --------------------------------------------------------------
+
+-- True when the player is driving with a mouse/keyboard (ghost follows the
+-- cursor); false on touch/gamepad, where the ghost follows a centre reticle.
+local function pointerMode(): boolean
+	local t = UserInputService:GetLastInputType()
+	return t == Enum.UserInputType.MouseMovement
+		or t == Enum.UserInputType.MouseButton1
+		or t == Enum.UserInputType.MouseButton2
+		or t == Enum.UserInputType.MouseWheel
+		or t == Enum.UserInputType.Keyboard
+end
 
 local function orientedFootprint(kind: string, rotation: number): (number, number)
 	local def = Buildings[kind]
@@ -246,6 +259,81 @@ end
 
 -- ---- Placement ------------------------------------------------------------
 
+-- Bottom-centre Place / Rotate / Cancel controls (essential on touch & console;
+-- handy everywhere) plus a centre reticle shown when aiming without a cursor.
+function BuildController:_buildPlaceControls()
+	local HudController = require(script.Parent.HudController)
+	local gui = HudController:GetGui()
+
+	local function btn(text: string, color: Color3, width: number, onClick: () -> ()): TextButton
+		return Create("TextButton", {
+			BackgroundColor3 = color,
+			Size = UDim2.fromOffset(width, 46),
+			Font = Theme.font.bold,
+			Text = text,
+			TextColor3 = Theme.color.text,
+			TextSize = 16,
+			AutoButtonColor = true,
+			[Create.Children] = {
+				Create("UICorner", { CornerRadius = Theme.corner }),
+				Create("UIStroke", { Color = Theme.color.stroke, Thickness = 1 }),
+			},
+			[Create.Event] = { Activated = onClick },
+		}) :: TextButton
+	end
+
+	local bar = Create("Frame", {
+		Name = "PlaceControls",
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -72),
+		Size = UDim2.fromOffset(320, 46),
+		BackgroundTransparency = 1,
+		Visible = false,
+		[Create.Children] = {
+			Create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Horizontal,
+				Padding = UDim.new(0, 8),
+				HorizontalAlignment = Enum.HorizontalAlignment.Center,
+				VerticalAlignment = Enum.VerticalAlignment.Center,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+			}),
+			btn("⟳ Rotate", Theme.color.panelLight, 96, function()
+				self._placingRotation = (self._placingRotation + 90) % 360
+			end),
+			btn("✓ Place", Theme.color.good, 116, function()
+				self:_confirmPlacement()
+			end),
+			btn("✕ Cancel", Color3.fromRGB(120, 50, 50), 96, function()
+				self:_cancelPlacement()
+			end),
+		},
+	}) :: Frame
+	bar.Parent = gui
+	self._placeBar = bar
+
+	local reticle = Create("Frame", {
+		Name = "Reticle",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(46, 46),
+		BackgroundTransparency = 1,
+		Visible = false,
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = UDim.new(1, 0) }),
+			Create("UIStroke", { Color = Theme.color.accent, Thickness = 2, Transparency = 0.2 }),
+			Create("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(6, 6),
+				BackgroundColor3 = Theme.color.accent,
+				[Create.Children] = { Create("UICorner", { CornerRadius = UDim.new(1, 0) }) },
+			}),
+		},
+	}) :: Frame
+	reticle.Parent = gui
+	self._reticle = reticle
+end
+
 function BuildController:_beginPlacement(kind: string)
 	self:_clearSelection()
 	self._placingKind = kind
@@ -263,6 +351,9 @@ function BuildController:_beginPlacement(kind: string)
 	if self._panel then
 		self._panel.Visible = false
 	end
+	if self._placeBar then
+		self._placeBar.Visible = true
+	end
 end
 
 function BuildController:_cancelPlacement()
@@ -271,15 +362,31 @@ function BuildController:_cancelPlacement()
 		self._ghost:Destroy()
 		self._ghost = nil
 	end
+	if self._placeBar then
+		self._placeBar.Visible = false
+	end
+	if self._reticle then
+		self._reticle.Visible = false
+	end
 end
 
--- Raycast the mouse against the baseplate; returns the corner tile for the
--- current footprint (centred on the cursor), or nil if the cursor is off-map.
+-- The screen point the ghost/selection tracks: the mouse on desktop, the centre
+-- of the viewport on touch/gamepad (you aim by panning the camera).
+function BuildController:_targetPoint(): Vector2
+	if pointerMode() then
+		return UserInputService:GetMouseLocation()
+	end
+	local vp = Workspace.CurrentCamera.ViewportSize
+	return Vector2.new(vp.X / 2, vp.Y / 2)
+end
+
+-- Raycast the target point against the baseplate; returns the corner tile for
+-- the current footprint (centred on the point), or nil if it is off-map.
 function BuildController:_cursorTile(): ({ x: number, z: number })?
 	local WorldController = require(script.Parent.WorldController)
 	local camera = Workspace.CurrentCamera
-	local mouse = UserInputService:GetMouseLocation()
-	local ray = camera:ViewportPointToRay(mouse.X, mouse.Y)
+	local pt = self:_targetPoint()
+	local ray = camera:ViewportPointToRay(pt.X, pt.Y)
 
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Include
@@ -361,11 +468,11 @@ end
 
 -- ---- Selection + context actions ------------------------------------------
 
-function BuildController:_pickBuildingUnderCursor(): string?
+function BuildController:_pickBuildingAt(screenPt: Vector2?): string?
 	local WorldController = require(script.Parent.WorldController)
 	local camera = Workspace.CurrentCamera
-	local mouse = UserInputService:GetMouseLocation()
-	local ray = camera:ViewportPointToRay(mouse.X, mouse.Y)
+	local pt = screenPt or self:_targetPoint()
+	local ray = camera:ViewportPointToRay(pt.X, pt.Y)
 
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Include
@@ -530,39 +637,72 @@ end
 
 -- ---- Input ----------------------------------------------------------------
 
+function BuildController:_tapSelect(screenPt: Vector2?)
+	local id = self:_pickBuildingAt(screenPt)
+	if id then
+		self:_select(id)
+	else
+		self:_clearSelection()
+	end
+end
+
 function BuildController:_bindInput()
+	local touchStart: Vector2? = nil
+
 	UserInputService.InputBegan:Connect(function(input, gameProcessed)
-		if input.KeyCode == Enum.KeyCode.R and self._placingKind then
+		-- Rotate: R key or gamepad R1.
+		if (input.KeyCode == Enum.KeyCode.R or input.KeyCode == Enum.KeyCode.ButtonR1) and self._placingKind then
 			self._placingRotation = (self._placingRotation + 90) % 360
 			return
 		end
-		if input.KeyCode == Enum.KeyCode.Escape then
+		-- Cancel: Escape or gamepad B.
+		if input.KeyCode == Enum.KeyCode.Escape or input.KeyCode == Enum.KeyCode.ButtonB then
 			self:_cancelPlacement()
 			self:_clearSelection()
 			return
 		end
+
+		-- Remember a touch start so InputEnded can tell a tap from a drag.
+		if input.UserInputType == Enum.UserInputType.Touch then
+			touchStart = Vector2.new(input.Position.X, input.Position.Y)
+			return -- never place/select on touch-begin; that's for tap/buttons
+		end
+
 		if gameProcessed then
 			return
 		end
-		if input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch
-		then
+		-- Desktop click, or gamepad A (aims via the reticle).
+		local isConfirm = (input.UserInputType == Enum.UserInputType.MouseButton1 and pointerMode())
+			or input.KeyCode == Enum.KeyCode.ButtonA
+		if isConfirm then
 			if self._placingKind then
 				self:_confirmPlacement()
 			else
-				local id = self:_pickBuildingUnderCursor()
-				if id then
-					self:_select(id)
-				else
-					self:_clearSelection()
-				end
+				self:_tapSelect(nil)
 			end
+		end
+	end)
+
+	-- Touch: a short tap (not a drag) selects a building; placement uses the
+	-- on-screen Place button, so panning never accidentally builds.
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType ~= Enum.UserInputType.Touch or not touchStart then
+			return
+		end
+		local endPt = Vector2.new(input.Position.X, input.Position.Y)
+		local moved = (endPt - touchStart).Magnitude
+		touchStart = nil
+		if moved < 14 and not self._placingKind then
+			self:_tapSelect(endPt)
 		end
 	end)
 
 	RunService.RenderStepped:Connect(function()
 		if self._placingKind then
 			self:_updateGhost()
+			if self._reticle then
+				self._reticle.Visible = not pointerMode()
+			end
 		end
 	end)
 end
@@ -575,6 +715,7 @@ function BuildController:Start()
 
 	self:_buildMenu()
 	self:_buildSelectionPanel()
+	self:_buildPlaceControls()
 	self:_bindInput()
 
 	HudController:AddButton("🏗 Build", function()

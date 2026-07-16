@@ -3,7 +3,7 @@
 <Meta name="ExplicitAutoJoints">true</Meta>
 <External>null</External>
 <External>nil</External>
-<Item class="ReplicatedStorage" referent="RBX00000067"><Properties></Properties><Item class="Folder" referent="RBX00000020"><Properties><string name="Name">Nexus</string></Properties><Item class="ModuleScript" referent="RBX00000010"><Properties><string name="Name">Config</string><ProtectedString name="Source">--!strict
+<Item class="ReplicatedStorage" referent="RBX00000070"><Properties></Properties><Item class="Folder" referent="RBX00000021"><Properties><string name="Name">Nexus</string></Properties><Item class="ModuleScript" referent="RBX00000011"><Properties><string name="Name">Config</string><ProtectedString name="Source">--!strict
 --[[
 	Config/init.luau
 	Aggregates every configuration table behind one require. Because this folder
@@ -21,6 +21,7 @@ local Config = {
 	Regions = require(script.Regions),
 	MilitaryUnits = require(script.MilitaryUnits),
 	ServerSettings = require(script.ServerSettings),
+	Market = require(script.Market),
 }
 
 return Config
@@ -621,7 +622,43 @@ local Laws: { [string]: LawDef } = {
 }
 
 return Laws
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000005"><Properties><string name="Name">MilitaryUnits</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000005"><Properties><string name="Name">Market</string><ProtectedString name="Source">--!strict
+--[[
+	Config/Market.luau
+	Tuning for the global commodity market. Prices are money-per-unit and move
+	each market tick from three forces: mean-reversion toward `base`, random
+	volatility, and net player demand (buys push up, sells push down). A small
+	spread makes the market maker's buy price higher than its sell price, so you
+	can't arbitrage instantly.
+
+	Money is the currency and energy is a flow, so neither is marketable; the four
+	stockpiled resources are.
+]]
+
+local Market = {}
+
+Market.tick = 6 -- seconds between price updates
+Market.spread = 0.03 -- buy at +3%, sell at -3%
+Market.meanReversion = 0.05 -- pull toward base each tick
+Market.impact = 0.0006 -- price move per unit of net demand
+Market.demandDecay = 0.5 -- how fast demand pressure fades
+Market.floorFactor = 0.4 -- price never below base * this
+Market.ceilFactor = 2.5 -- ...nor above base * this
+
+export type Commodity = { base: number, volatility: number }
+
+Market.resources = {
+	materials = { base = 8, volatility = 0.06 },
+	food = { base = 3, volatility = 0.05 },
+	research = { base = 16, volatility = 0.09 },
+	influence = { base = 13, volatility = 0.08 },
+} :: { [string]: Commodity }
+
+-- Stable display order.
+Market.order = { "materials", "food", "research", "influence" }
+
+return Market
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000006"><Properties><string name="Name">MilitaryUnits</string><ProtectedString name="Source">--!strict
 --[[
 	Config/MilitaryUnits.luau
 	Unit definitions for the (optional) military layer. Keys match the fields of
@@ -674,7 +711,7 @@ local MilitaryUnits: { [string]: UnitDef } = {
 }
 
 return MilitaryUnits
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000006"><Properties><string name="Name">Regions</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000007"><Properties><string name="Name">Regions</string><ProtectedString name="Source">--!strict
 --[[
 	Config/Regions.luau
 	The shared world map of claimable regions. Regions sit on a grid; two regions
@@ -719,7 +756,7 @@ define({ id = "aurora_steppe", displayName = "Aurora Steppe", col = 2, row = 2, 
 define({ id = "meridian_cape", displayName = "Meridian Cape", col = 3, row = 2, cost = 70, value = 5, bonus = { influence = 6 } })
 
 return Regions
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000007"><Properties><string name="Name">Resources</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000008"><Properties><string name="Name">Resources</string><ProtectedString name="Source">--!strict
 --[[
 	Config/Resources.luau
 	Display metadata for each resource. Simulation math lives elsewhere; this is
@@ -788,7 +825,7 @@ local Resources: { [string]: ResourceMeta } = {
 }
 
 return Resources
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000008"><Properties><string name="Name">ServerSettings</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000009"><Properties><string name="Name">ServerSettings</string><ProtectedString name="Source">--!strict
 --[[
 	Config/ServerSettings.luau
 	Server-wide toggles a place owner can flip before shipping. Read by both the
@@ -804,7 +841,7 @@ local ServerSettings = {
 }
 
 return ServerSettings
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000009"><Properties><string name="Name">Technologies</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000010"><Properties><string name="Name">Technologies</string><ProtectedString name="Source">--!strict
 --[[
 	Config/Technologies.luau
 	The research tree. Each tech gates buildings and/or applies named modifiers
@@ -971,7 +1008,7 @@ define({
 })
 
 return Technologies
-</ProtectedString></Properties></Item></Item><Item class="ModuleScript" referent="RBX00000011"><Properties><string name="Name">Constants</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item><Item class="ModuleScript" referent="RBX00000012"><Properties><string name="Name">Constants</string><ProtectedString name="Source">--!strict
 --[[
 	Constants.luau
 	Immutable, project-wide constants. No gameplay balance numbers live here —
@@ -1015,7 +1052,7 @@ Constants.GDP_HISTORY_LENGTH = 60
 Constants.RESOURCE_ORDER = { "money", "materials", "energy", "food", "research", "influence" } :: { string }
 
 return Constants
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000012"><Properties><string name="Name">Logger</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000013"><Properties><string name="Name">Logger</string><ProtectedString name="Source">--!strict
 --[[
 	Logger.luau
 	Namespaced, level-filtered logging. Every subsystem creates its own logger
@@ -1093,7 +1130,7 @@ function Logger:Error(...: any)
 end
 
 return Logger
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000013"><Properties><string name="Name">Net</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000014"><Properties><string name="Name">Net</string><ProtectedString name="Source">--!strict
 --[[
 	Net.luau
 	The single, guarded gateway between client and server.
@@ -1349,7 +1386,7 @@ else
 end
 
 return Net
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000014"><Properties><string name="Name">NetRoutes</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000015"><Properties><string name="Name">NetRoutes</string><ProtectedString name="Source">--!strict
 --[[
 	NetRoutes.luau
 	The canonical list of network route names. Both sides import these constants
@@ -1383,16 +1420,21 @@ local NetRoutes = {
 	RECRUIT_UNITS = "military/recruit",
 	DISBAND_UNITS = "military/disband",
 
+	-- Market.
+	MARKET_BUY = "market/buy",
+	MARKET_SELL = "market/sell",
+
 	-- Server -&gt; client pushes.
 	STATE_SYNC = "state/sync",
 	NOTIFY = "state/notify",
 	TRADE_INBOX = "diplomacy/inbox",
 	WORLD_SYNC = "world/sync",
 	TERRITORY_SYNC = "territory/sync",
+	MARKET_SYNC = "market/sync",
 }
 
 return NetRoutes
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000015"><Properties><string name="Name">ResourceMath</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000016"><Properties><string name="Name">ResourceMath</string><ProtectedString name="Source">--!strict
 --[[
 	ResourceMath.luau
 	Pure helpers for combining ResourceBags. The server uses these to mutate the
@@ -1463,7 +1505,7 @@ function ResourceMath.grant(wallet: ResourceBag, gain: ResourceBag)
 end
 
 return ResourceMath
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000016"><Properties><string name="Name">Signal</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000017"><Properties><string name="Name">Signal</string><ProtectedString name="Source">--!strict
 --[[
 	Signal.luau
 	A minimal, original event/observer primitive.
@@ -1565,7 +1607,7 @@ function Signal:Destroy()
 end
 
 return Signal
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000017"><Properties><string name="Name">TableUtil</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000018"><Properties><string name="Name">TableUtil</string><ProtectedString name="Source">--!strict
 --[[
 	TableUtil.luau
 	Small, dependency-free helpers used by the data and simulation layers.
@@ -1636,7 +1678,7 @@ function TableUtil.shallowEqual(a: { [any]: any }, b: { [any]: any }): boolean
 end
 
 return TableUtil
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000018"><Properties><string name="Name">Types</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000019"><Properties><string name="Name">Types</string><ProtectedString name="Source">--!strict
 --[[
 	Types.luau
 	Central typed-Luau definitions shared by server and client.
@@ -1790,7 +1832,7 @@ export type TechDef = {
 }
 
 return {}
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000019"><Properties><string name="Name">WorldGrid</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000020"><Properties><string name="Name">WorldGrid</string><ProtectedString name="Source">--!strict
 --[[
 	WorldGrid.luau
 	The mapping between the logical build grid (integer tiles the server stores)
@@ -1834,7 +1876,7 @@ function WorldGrid.worldToTile(position: Vector3): (number, number)
 end
 
 return WorldGrid
-</ProtectedString></Properties></Item></Item></Item><Item class="ServerScriptService" referent="RBX00000068"><Properties></Properties><Item class="Script" referent="RBX00000041"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item></Item><Item class="ServerScriptService" referent="RBX00000071"><Properties></Properties><Item class="Script" referent="RBX00000043"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
 --[[
 	init.server.luau
 	Server bootstrap. Requires every service, registers it with the Framework,
@@ -1865,6 +1907,7 @@ local ORDER = {
 	"DiplomacyService",
 	"TerritoryService",
 	"MilitaryService",
+	"MarketService",
 	"AIService",
 	"EventService",
 	"OnboardingService",
@@ -1879,7 +1922,7 @@ end
 Framework.start()
 
 print("[Nexus] server online — Project Nexus nation simulator")
-</ProtectedString></Properties><Item class="ModuleScript" referent="RBX00000021"><Properties><string name="Name">Framework</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties><Item class="ModuleScript" referent="RBX00000022"><Properties><string name="Name">Framework</string><ProtectedString name="Source">--!strict
 --[[
 	Framework.luau
 	A tiny service locator with a two-phase lifecycle.
@@ -1957,7 +2000,7 @@ function Framework.start()
 end
 
 return Framework
-</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000037"><Properties><string name="Name">Services</string></Properties><Item class="ModuleScript" referent="RBX00000022"><Properties><string name="Name">AIService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000039"><Properties><string name="Name">Services</string></Properties><Item class="ModuleScript" referent="RBX00000023"><Properties><string name="Name">AIService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/AIService.luau
 	Server-owned AI nations that share the exact same Nation shape as players, so
@@ -2242,7 +2285,7 @@ function AIService:Start()
 end
 
 return AIService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000023"><Properties><string name="Name">CitizenService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000024"><Properties><string name="Name">CitizenService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/CitizenService.luau
 	The populace as a living system. Each tick it moves education and health
@@ -2353,7 +2396,7 @@ function CitizenService:Init()
 end
 
 return CitizenService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000024"><Properties><string name="Name">CityService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000025"><Properties><string name="Name">CityService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/CityService.luau
 	The authoritative city builder. Owns every building a nation places and is
@@ -2757,7 +2800,7 @@ function CityService:Start()
 end
 
 return CityService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000025"><Properties><string name="Name">DataService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000026"><Properties><string name="Name">DataService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/DataService.luau
 	Original, session-safe persistence for player profiles.
@@ -3170,7 +3213,7 @@ function DataService:Start()
 end
 
 return DataService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000026"><Properties><string name="Name">DiplomacyService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000027"><Properties><string name="Name">DiplomacyService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/DiplomacyService.luau
 	Player-to-player (and player-to-AI) diplomacy: escrowed resource trades and
@@ -3587,7 +3630,7 @@ function DiplomacyService:Start()
 end
 
 return DiplomacyService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000027"><Properties><string name="Name">EconomyService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000028"><Properties><string name="Name">EconomyService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/EconomyService.luau
 	The master simulation tick. Every ECONOMY_TICK it walks each live nation and,
@@ -3817,7 +3860,7 @@ function EconomyService:Start()
 end
 
 return EconomyService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000028"><Properties><string name="Name">EventService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000029"><Properties><string name="Name">EventService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/EventService.luau
 	Keeps the world unpredictable: periodic national events hit a random nation,
@@ -4000,7 +4043,174 @@ function EventService:Start()
 end
 
 return EventService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000029"><Properties><string name="Name">MilitaryService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000030"><Properties><string name="Name">MarketService</string><ProtectedString name="Source">--!strict
+--[[
+	Services/MarketService.luau
+	A living global commodity market. Prices update every market tick from
+	mean-reversion, volatility and net player demand, then broadcast to all
+	clients. Players buy resources with money (pushing the price up) or sell them
+	for money (pushing it down). A spread separates buy/sell prices so instant
+	round-trips lose value.
+
+	Authoritative and exploit-safe: amounts are validated and bounded, buys check
+	money, sells check the actual stockpile, and money never goes negative.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Logger = require(ReplicatedStorage.Nexus.Logger)
+local Net = require(ReplicatedStorage.Nexus.Net)
+local NetRoutes = require(ReplicatedStorage.Nexus.NetRoutes)
+local Types = require(ReplicatedStorage.Nexus.Types)
+local Market = require(ReplicatedStorage.Nexus.Config.Market)
+
+local DataService = require(script.Parent.DataService)
+local NotificationService = require(script.Parent.NotificationService)
+local ReplicationService = require(script.Parent.ReplicationService)
+
+type Nation = Types.Nation
+
+local MAX_AMOUNT = 100000
+
+local log = Logger.new("MarketService")
+
+local MarketService = {
+	Name = "MarketService",
+}
+
+MarketService._price = {} :: { [string]: number }
+MarketService._prev = {} :: { [string]: number }
+MarketService._demand = {} :: { [string]: number }
+
+local function clamp(v: number, lo: number, hi: number): number
+	return math.max(lo, math.min(hi, v))
+end
+
+-- ---- Price simulation -----------------------------------------------------
+
+function MarketService:_tickPrices()
+	for res, def in Market.resources do
+		local price = self._price[res]
+		local base = def.base
+		local noise = (math.random() * 2 - 1) * def.volatility * base
+		local demandDelta = self._demand[res] * base * Market.impact
+		local next = price + (base - price) * Market.meanReversion + noise + demandDelta
+		next = clamp(next, base * Market.floorFactor, base * Market.ceilFactor)
+
+		self._prev[res] = price
+		self._price[res] = next
+		self._demand[res] *= Market.demandDecay
+	end
+end
+
+function MarketService:Broadcast()
+	local rows = {}
+	for _, res in Market.order do
+		table.insert(rows, {
+			id = res,
+			price = self._price[res],
+			prev = self._prev[res],
+			base = Market.resources[res].base,
+		})
+	end
+	Net.fireAllClients(NetRoutes.MARKET_SYNC, rows)
+end
+
+--- Current mid price for a resource (used by other systems/AI).
+function MarketService:PriceOf(res: string): number?
+	return self._price[res]
+end
+
+-- ---- Trading --------------------------------------------------------------
+
+function MarketService:_buy(player: Player, payload: any): any
+	local nation = DataService:GetNation(player)
+	if not nation or typeof(payload) ~= "table" then
+		return { success = false, reason = "bad_request" }
+	end
+	local res = payload.resource
+	if not Market.resources[res] then
+		return { success = false, reason = "not_traded" }
+	end
+	local amount = payload.amount
+	if typeof(amount) ~= "number" or amount ~= amount or amount &lt; 1 then
+		return { success = false, reason = "bad_amount" }
+	end
+	amount = math.min(math.floor(amount), MAX_AMOUNT)
+
+	local unit = self._price[res] * (1 + Market.spread)
+	local cost = math.ceil(amount * unit)
+	if (nation.resources.money or 0) &lt; cost then
+		NotificationService:Send(player, "warning", "Cannot afford purchase")
+		return { success = false, reason = "insufficient_money" }
+	end
+	nation.resources.money -= cost
+	nation.resources[res] = (nation.resources[res] or 0) + amount
+	self._demand[res] += amount
+	ReplicationService:MarkDirty(player)
+	return { success = true, spent = cost }
+end
+
+function MarketService:_sell(player: Player, payload: any): any
+	local nation = DataService:GetNation(player)
+	if not nation or typeof(payload) ~= "table" then
+		return { success = false, reason = "bad_request" }
+	end
+	local res = payload.resource
+	if not Market.resources[res] then
+		return { success = false, reason = "not_traded" }
+	end
+	local amount = payload.amount
+	if typeof(amount) ~= "number" or amount ~= amount or amount &lt; 1 then
+		return { success = false, reason = "bad_amount" }
+	end
+	amount = math.min(math.floor(amount), MAX_AMOUNT)
+	if (nation.resources[res] or 0) &lt; amount then
+		return { success = false, reason = "insufficient_stock" }
+	end
+
+	local unit = self._price[res] * (1 - Market.spread)
+	local revenue = math.floor(amount * unit)
+	nation.resources[res] -= amount
+	nation.resources.money += revenue
+	self._demand[res] -= amount
+	ReplicationService:MarkDirty(player)
+	return { success = true, earned = revenue }
+end
+
+-- ---- Lifecycle ------------------------------------------------------------
+
+function MarketService:Start()
+	for res, def in Market.resources do
+		self._price[res] = def.base
+		self._prev[res] = def.base
+		self._demand[res] = 0
+	end
+
+	Net.handleRequest(NetRoutes.MARKET_BUY, function(player, payload)
+		return self:_buy(player, payload)
+	end, { rate = 8, per = 1 })
+	Net.handleRequest(NetRoutes.MARKET_SELL, function(player, payload)
+		return self:_sell(player, payload)
+	end, { rate = 8, per = 1 })
+
+	DataService.Loaded:Connect(function()
+		self:Broadcast()
+	end)
+
+	task.spawn(function()
+		while true do
+			task.wait(Market.tick)
+			self:_tickPrices()
+			self:Broadcast()
+		end
+	end)
+
+	log:Info("market service ready")
+end
+
+return MarketService
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000031"><Properties><string name="Name">MilitaryService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/MilitaryService.luau
 	The optional military layer: recruit and disband units. Gated behind
@@ -4110,7 +4320,7 @@ function MilitaryService:Start()
 end
 
 return MilitaryService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000030"><Properties><string name="Name">NotificationService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000032"><Properties><string name="Name">NotificationService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/NotificationService.luau
 	Server-authored, transient messages to a player's HUD: "Not enough
@@ -4149,7 +4359,7 @@ function NotificationService:Broadcast(severity: Severity, title: string, body: 
 end
 
 return NotificationService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000031"><Properties><string name="Name">OnboardingService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000033"><Properties><string name="Name">OnboardingService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/OnboardingService.luau
 	Gently teaches a brand-new nation the ropes with a short, staggered sequence
@@ -4209,7 +4419,7 @@ function OnboardingService:Start()
 end
 
 return OnboardingService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000032"><Properties><string name="Name">PoliticsService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000034"><Properties><string name="Name">PoliticsService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/PoliticsService.luau
 	Government, laws and the public's verdict on your rule. Players set the tax
@@ -4444,7 +4654,7 @@ function PoliticsService:Start()
 end
 
 return PoliticsService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000033"><Properties><string name="Name">ReplicationService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000035"><Properties><string name="Name">ReplicationService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/ReplicationService.luau
 	The only place server state reaches a client. Services never call Net
@@ -4539,7 +4749,7 @@ function ReplicationService:Start()
 end
 
 return ReplicationService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000034"><Properties><string name="Name">ResearchService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000036"><Properties><string name="Name">ResearchService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/ResearchService.luau
 	Drives the technology tree. Research accumulates as the `research` resource
@@ -4651,7 +4861,7 @@ function ResearchService:Start()
 end
 
 return ResearchService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000035"><Properties><string name="Name">TerritoryService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000037"><Properties><string name="Name">TerritoryService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/TerritoryService.luau
 	Authoritative ownership of the shared world map. Nations spend influence to
@@ -4912,7 +5122,7 @@ function TerritoryService:Start()
 end
 
 return TerritoryService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000036"><Properties><string name="Name">WorldService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000038"><Properties><string name="Name">WorldService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/WorldService.luau
 	The registry that ties every nation — human or AI — into one world. It resolves
@@ -5056,7 +5266,7 @@ function WorldService:Start()
 end
 
 return WorldService
-</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000040"><Properties><string name="Name">Util</string></Properties><Item class="ModuleScript" referent="RBX00000038"><Properties><string name="Name">Modifiers</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000042"><Properties><string name="Name">Util</string></Properties><Item class="ModuleScript" referent="RBX00000040"><Properties><string name="Name">Modifiers</string><ProtectedString name="Source">--!strict
 --[[
 	Util/Modifiers.luau
 	Resolves a nation's active government, unlocked technologies, and enacted
@@ -5182,7 +5392,7 @@ function Modifiers.resolve(nation: Nation): Resolved
 end
 
 return Modifiers
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000039"><Properties><string name="Name">Validation</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000041"><Properties><string name="Name">Validation</string><ProtectedString name="Source">--!strict
 --[[
 	Util/Validation.luau
 	Server-side guards for untrusted client payloads. Every request handler runs
@@ -5231,7 +5441,7 @@ function Validation.readPosition(payload: any): ({ x: number, z: number })?
 end
 
 return Validation
-</ProtectedString></Properties></Item></Item></Item></Item><Item class="StarterPlayer" referent="RBX00000070"><Properties></Properties><Item class="StarterPlayerScripts" referent="RBX00000069"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX00000066"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item></Item></Item><Item class="StarterPlayer" referent="RBX00000073"><Properties></Properties><Item class="StarterPlayerScripts" referent="RBX00000072"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX00000069"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
 --[[
 	init.client.luau
 	Client bootstrap. Registers every controller with the ClientFramework, then
@@ -5263,6 +5473,7 @@ local ORDER = {
 	"DiplomacyController",
 	"TerritoryController",
 	"MilitaryController",
+	"MarketController",
 	"LeaderboardController",
 }
 
@@ -5275,7 +5486,7 @@ end
 ClientFramework.start()
 
 print("[Nexus] client online for " .. Players.LocalPlayer.Name)
-</ProtectedString></Properties><Item class="ModuleScript" referent="RBX00000042"><Properties><string name="Name">ClientFramework</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties><Item class="ModuleScript" referent="RBX00000044"><Properties><string name="Name">ClientFramework</string><ProtectedString name="Source">--!strict
 --[[
 	ClientFramework.luau
 	The client mirror of the server Framework: a controller registry with the
@@ -5340,7 +5551,7 @@ function ClientFramework.start()
 end
 
 return ClientFramework
-</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000057"><Properties><string name="Name">Controllers</string></Properties><Item class="ModuleScript" referent="RBX00000043"><Properties><string name="Name">AmbianceController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000060"><Properties><string name="Name">Controllers</string></Properties><Item class="ModuleScript" referent="RBX00000045"><Properties><string name="Name">AmbianceController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/AmbianceController.luau
 	Sets the mood: cinematic lighting, atmospheric depth and post-processing.
@@ -5419,7 +5630,7 @@ function AmbianceController:Init()
 end
 
 return AmbianceController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000044"><Properties><string name="Name">BuildController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000046"><Properties><string name="Name">BuildController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/BuildController.luau
 	Everything the player touches to shape their city:
@@ -5462,8 +5673,21 @@ BuildController._placingRotation = 0
 BuildController._ghost = nil :: BasePart?
 BuildController._buttons = {} :: { { button: TextButton, kind: string } }
 BuildController._highlight = nil :: Highlight?
+BuildController._placeBar = nil :: Frame?
+BuildController._reticle = nil :: Frame?
 
 -- ---- Helpers --------------------------------------------------------------
+
+-- True when the player is driving with a mouse/keyboard (ghost follows the
+-- cursor); false on touch/gamepad, where the ghost follows a centre reticle.
+local function pointerMode(): boolean
+	local t = UserInputService:GetLastInputType()
+	return t == Enum.UserInputType.MouseMovement
+		or t == Enum.UserInputType.MouseButton1
+		or t == Enum.UserInputType.MouseButton2
+		or t == Enum.UserInputType.MouseWheel
+		or t == Enum.UserInputType.Keyboard
+end
 
 local function orientedFootprint(kind: string, rotation: number): (number, number)
 	local def = Buildings[kind]
@@ -5667,6 +5891,81 @@ end
 
 -- ---- Placement ------------------------------------------------------------
 
+-- Bottom-centre Place / Rotate / Cancel controls (essential on touch &amp; console;
+-- handy everywhere) plus a centre reticle shown when aiming without a cursor.
+function BuildController:_buildPlaceControls()
+	local HudController = require(script.Parent.HudController)
+	local gui = HudController:GetGui()
+
+	local function btn(text: string, color: Color3, width: number, onClick: () -&gt; ()): TextButton
+		return Create("TextButton", {
+			BackgroundColor3 = color,
+			Size = UDim2.fromOffset(width, 46),
+			Font = Theme.font.bold,
+			Text = text,
+			TextColor3 = Theme.color.text,
+			TextSize = 16,
+			AutoButtonColor = true,
+			[Create.Children] = {
+				Create("UICorner", { CornerRadius = Theme.corner }),
+				Create("UIStroke", { Color = Theme.color.stroke, Thickness = 1 }),
+			},
+			[Create.Event] = { Activated = onClick },
+		}) :: TextButton
+	end
+
+	local bar = Create("Frame", {
+		Name = "PlaceControls",
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -72),
+		Size = UDim2.fromOffset(320, 46),
+		BackgroundTransparency = 1,
+		Visible = false,
+		[Create.Children] = {
+			Create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Horizontal,
+				Padding = UDim.new(0, 8),
+				HorizontalAlignment = Enum.HorizontalAlignment.Center,
+				VerticalAlignment = Enum.VerticalAlignment.Center,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+			}),
+			btn("⟳ Rotate", Theme.color.panelLight, 96, function()
+				self._placingRotation = (self._placingRotation + 90) % 360
+			end),
+			btn("✓ Place", Theme.color.good, 116, function()
+				self:_confirmPlacement()
+			end),
+			btn("✕ Cancel", Color3.fromRGB(120, 50, 50), 96, function()
+				self:_cancelPlacement()
+			end),
+		},
+	}) :: Frame
+	bar.Parent = gui
+	self._placeBar = bar
+
+	local reticle = Create("Frame", {
+		Name = "Reticle",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(46, 46),
+		BackgroundTransparency = 1,
+		Visible = false,
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = UDim.new(1, 0) }),
+			Create("UIStroke", { Color = Theme.color.accent, Thickness = 2, Transparency = 0.2 }),
+			Create("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(6, 6),
+				BackgroundColor3 = Theme.color.accent,
+				[Create.Children] = { Create("UICorner", { CornerRadius = UDim.new(1, 0) }) },
+			}),
+		},
+	}) :: Frame
+	reticle.Parent = gui
+	self._reticle = reticle
+end
+
 function BuildController:_beginPlacement(kind: string)
 	self:_clearSelection()
 	self._placingKind = kind
@@ -5684,6 +5983,9 @@ function BuildController:_beginPlacement(kind: string)
 	if self._panel then
 		self._panel.Visible = false
 	end
+	if self._placeBar then
+		self._placeBar.Visible = true
+	end
 end
 
 function BuildController:_cancelPlacement()
@@ -5692,15 +5994,31 @@ function BuildController:_cancelPlacement()
 		self._ghost:Destroy()
 		self._ghost = nil
 	end
+	if self._placeBar then
+		self._placeBar.Visible = false
+	end
+	if self._reticle then
+		self._reticle.Visible = false
+	end
 end
 
--- Raycast the mouse against the baseplate; returns the corner tile for the
--- current footprint (centred on the cursor), or nil if the cursor is off-map.
+-- The screen point the ghost/selection tracks: the mouse on desktop, the centre
+-- of the viewport on touch/gamepad (you aim by panning the camera).
+function BuildController:_targetPoint(): Vector2
+	if pointerMode() then
+		return UserInputService:GetMouseLocation()
+	end
+	local vp = Workspace.CurrentCamera.ViewportSize
+	return Vector2.new(vp.X / 2, vp.Y / 2)
+end
+
+-- Raycast the target point against the baseplate; returns the corner tile for
+-- the current footprint (centred on the point), or nil if it is off-map.
 function BuildController:_cursorTile(): ({ x: number, z: number })?
 	local WorldController = require(script.Parent.WorldController)
 	local camera = Workspace.CurrentCamera
-	local mouse = UserInputService:GetMouseLocation()
-	local ray = camera:ViewportPointToRay(mouse.X, mouse.Y)
+	local pt = self:_targetPoint()
+	local ray = camera:ViewportPointToRay(pt.X, pt.Y)
 
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Include
@@ -5782,11 +6100,11 @@ end
 
 -- ---- Selection + context actions ------------------------------------------
 
-function BuildController:_pickBuildingUnderCursor(): string?
+function BuildController:_pickBuildingAt(screenPt: Vector2?): string?
 	local WorldController = require(script.Parent.WorldController)
 	local camera = Workspace.CurrentCamera
-	local mouse = UserInputService:GetMouseLocation()
-	local ray = camera:ViewportPointToRay(mouse.X, mouse.Y)
+	local pt = screenPt or self:_targetPoint()
+	local ray = camera:ViewportPointToRay(pt.X, pt.Y)
 
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Include
@@ -5951,39 +6269,72 @@ end
 
 -- ---- Input ----------------------------------------------------------------
 
+function BuildController:_tapSelect(screenPt: Vector2?)
+	local id = self:_pickBuildingAt(screenPt)
+	if id then
+		self:_select(id)
+	else
+		self:_clearSelection()
+	end
+end
+
 function BuildController:_bindInput()
+	local touchStart: Vector2? = nil
+
 	UserInputService.InputBegan:Connect(function(input, gameProcessed)
-		if input.KeyCode == Enum.KeyCode.R and self._placingKind then
+		-- Rotate: R key or gamepad R1.
+		if (input.KeyCode == Enum.KeyCode.R or input.KeyCode == Enum.KeyCode.ButtonR1) and self._placingKind then
 			self._placingRotation = (self._placingRotation + 90) % 360
 			return
 		end
-		if input.KeyCode == Enum.KeyCode.Escape then
+		-- Cancel: Escape or gamepad B.
+		if input.KeyCode == Enum.KeyCode.Escape or input.KeyCode == Enum.KeyCode.ButtonB then
 			self:_cancelPlacement()
 			self:_clearSelection()
 			return
 		end
+
+		-- Remember a touch start so InputEnded can tell a tap from a drag.
+		if input.UserInputType == Enum.UserInputType.Touch then
+			touchStart = Vector2.new(input.Position.X, input.Position.Y)
+			return -- never place/select on touch-begin; that's for tap/buttons
+		end
+
 		if gameProcessed then
 			return
 		end
-		if input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch
-		then
+		-- Desktop click, or gamepad A (aims via the reticle).
+		local isConfirm = (input.UserInputType == Enum.UserInputType.MouseButton1 and pointerMode())
+			or input.KeyCode == Enum.KeyCode.ButtonA
+		if isConfirm then
 			if self._placingKind then
 				self:_confirmPlacement()
 			else
-				local id = self:_pickBuildingUnderCursor()
-				if id then
-					self:_select(id)
-				else
-					self:_clearSelection()
-				end
+				self:_tapSelect(nil)
 			end
+		end
+	end)
+
+	-- Touch: a short tap (not a drag) selects a building; placement uses the
+	-- on-screen Place button, so panning never accidentally builds.
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType ~= Enum.UserInputType.Touch or not touchStart then
+			return
+		end
+		local endPt = Vector2.new(input.Position.X, input.Position.Y)
+		local moved = (endPt - touchStart).Magnitude
+		touchStart = nil
+		if moved &lt; 14 and not self._placingKind then
+			self:_tapSelect(endPt)
 		end
 	end)
 
 	RunService.RenderStepped:Connect(function()
 		if self._placingKind then
 			self:_updateGhost()
+			if self._reticle then
+				self._reticle.Visible = not pointerMode()
+			end
 		end
 	end)
 end
@@ -5996,6 +6347,7 @@ function BuildController:Start()
 
 	self:_buildMenu()
 	self:_buildSelectionPanel()
+	self:_buildPlaceControls()
 	self:_bindInput()
 
 	HudController:AddButton("🏗 Build", function()
@@ -6014,7 +6366,7 @@ function BuildController:Start()
 end
 
 return BuildController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000045"><Properties><string name="Name">DiplomacyController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000047"><Properties><string name="Name">DiplomacyController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/DiplomacyController.luau
 	The diplomacy screen: pick another nation, compose a resource-for-resource
@@ -6480,7 +6832,7 @@ function DiplomacyController:Start()
 end
 
 return DiplomacyController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000046"><Properties><string name="Name">EconomyController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000048"><Properties><string name="Name">EconomyController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/EconomyController.luau
 	A statistics dashboard: a live GDP graph (from the replicated gdpHistory), a
@@ -6790,7 +7142,7 @@ function EconomyController:Start()
 end
 
 return EconomyController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000047"><Properties><string name="Name">HudController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000049"><Properties><string name="Name">HudController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/HudController.luau
 	The persistent HUD: a top resource bar, a compact national-stats panel, and a
@@ -7116,7 +7468,7 @@ function HudController:Start()
 end
 
 return HudController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000048"><Properties><string name="Name">LeaderboardController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000050"><Properties><string name="Name">LeaderboardController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/LeaderboardController.luau
 	A ranked table of every nation in the world (players and AI) by power score.
@@ -7270,7 +7622,239 @@ function LeaderboardController:Start()
 end
 
 return LeaderboardController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000049"><Properties><string name="Name">MilitaryController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000051"><Properties><string name="Name">MarketController</string><ProtectedString name="Source">--!strict
+--[[
+	Controllers/MarketController.luau
+	The global commodity market screen: live prices with trend arrows and
+	buy/sell controls at a chosen quantity. Prices arrive via MARKET_SYNC; every
+	trade is a validated server request.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Net = require(ReplicatedStorage.Nexus.Net)
+local NetRoutes = require(ReplicatedStorage.Nexus.NetRoutes)
+local Market = require(ReplicatedStorage.Nexus.Config.Market)
+local Resources = require(ReplicatedStorage.Nexus.Config.Resources)
+
+local Create = require(script.Parent.Parent.UI.Create)
+local Decor = require(script.Parent.Parent.UI.Decor)
+local Motion = require(script.Parent.Parent.UI.Motion)
+local Theme = require(script.Parent.Parent.UI.Theme)
+
+local QUANTITIES = { 10, 50, 200, 1000 }
+
+local MarketController = {
+	Name = "MarketController",
+}
+
+MarketController._panel = nil :: Frame?
+MarketController._rows = {} :: { [string]: any }
+MarketController._qtyIndex = 2
+MarketController._qtyButton = nil :: TextButton?
+
+local function request(route: string, resource: string, amount: number)
+	task.spawn(function()
+		Net.request(route, { resource = resource, amount = amount })
+	end)
+end
+
+function MarketController:_qty(): number
+	return QUANTITIES[self._qtyIndex]
+end
+
+function MarketController:_row(res: string, order: number): Frame
+	local meta = Resources[res]
+	local color = Color3.new(meta.color[1], meta.color[2], meta.color[3])
+
+	local price = Create("TextLabel", {
+		Name = "Price",
+		BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(146, 0),
+		Size = UDim2.fromOffset(58, 48),
+		Font = Theme.font.bold,
+		Text = "$-",
+		TextColor3 = Theme.color.text,
+		TextSize = 15,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}) :: TextLabel
+
+	local function tradeButton(text: string, c: Color3, x: number, route: string): TextButton
+		return Create("TextButton", {
+			BackgroundColor3 = c,
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = UDim2.new(1, x, 0.5, 0),
+			Size = UDim2.fromOffset(54, 32),
+			Font = Theme.font.bold,
+			Text = text,
+			TextColor3 = Theme.color.bg,
+			TextSize = 13,
+			[Create.Children] = { Create("UICorner", { CornerRadius = UDim.new(0, 6) }) },
+			[Create.Event] = { Activated = function()
+				request(route, res, self:_qty())
+			end },
+		}) :: TextButton
+	end
+
+	local row = Create("Frame", {
+		LayoutOrder = order,
+		BackgroundColor3 = Theme.color.panelLight,
+		Size = UDim2.new(1, 0, 0, 48),
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+			Create("TextLabel", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(12, 0),
+				Size = UDim2.fromOffset(24, 48),
+				Font = Theme.font.bold,
+				Text = meta.symbol,
+				TextColor3 = color,
+				TextSize = 18,
+			}),
+			Create("TextLabel", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(38, 0),
+				Size = UDim2.fromOffset(110, 48),
+				Font = Theme.font.medium,
+				Text = meta.displayName,
+				TextColor3 = Theme.color.text,
+				TextSize = 13,
+				TextXAlignment = Enum.TextXAlignment.Left,
+			}),
+			price,
+			Create("TextLabel", {
+				Name = "Trend",
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(206, 0),
+				Size = UDim2.fromOffset(26, 48),
+				Font = Theme.font.bold,
+				Text = "–",
+				TextColor3 = Theme.color.textDim,
+				TextSize = 16,
+			}),
+			tradeButton("Buy", Theme.color.good, -64, NetRoutes.MARKET_BUY),
+			tradeButton("Sell", Theme.color.warn, -6, NetRoutes.MARKET_SELL),
+		},
+	}) :: Frame
+
+	self._rows[res] = { row = row, price = price, trend = row:FindFirstChild("Trend") }
+	return row
+end
+
+function MarketController:_build()
+	local HudController = require(script.Parent.HudController)
+	local gui = HudController:GetGui()
+
+	local list = Create("Frame", {
+		Position = UDim2.fromOffset(12, 78),
+		Size = UDim2.new(1, -24, 0, 216),
+		BackgroundTransparency = 1,
+		[Create.Children] = {
+			Create("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }),
+		},
+	})
+	for i, res in Market.order do
+		self:_row(res, i).Parent = list
+	end
+
+	self._qtyButton = Create("TextButton", {
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -12, 0, 40),
+		Size = UDim2.fromOffset(130, 30),
+		BackgroundColor3 = Theme.color.accentDim,
+		Font = Theme.font.bold,
+		Text = "Qty: 50",
+		TextColor3 = Theme.color.text,
+		TextSize = 14,
+		[Create.Children] = { Create("UICorner", { CornerRadius = UDim.new(0, 8) }) },
+		[Create.Event] = { Activated = function()
+			self._qtyIndex = (self._qtyIndex % #QUANTITIES) + 1
+			if self._qtyButton then
+				self._qtyButton.Text = "Qty: " .. self:_qty()
+			end
+		end },
+	}) :: TextButton
+
+	local panel = Create("Frame", {
+		Name = "MarketPanel",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(380, 320),
+		BackgroundColor3 = Theme.color.panel,
+		Visible = false,
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = Theme.corner }),
+			Create("UIStroke", { Color = Theme.color.stroke, Thickness = 1 }),
+			Create("TextLabel", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(14, 10),
+				Size = UDim2.new(1, -28, 0, 22),
+				Font = Theme.font.bold,
+				Text = "💱 Global Market",
+				TextColor3 = Theme.color.text,
+				TextSize = 17,
+				TextXAlignment = Enum.TextXAlignment.Left,
+			}),
+			Create("TextLabel", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(14, 44),
+				Size = UDim2.fromOffset(200, 22),
+				Font = Theme.font.regular,
+				Text = "Prices move with supply &amp; demand",
+				TextColor3 = Theme.color.textDim,
+				TextSize = 12,
+				TextXAlignment = Enum.TextXAlignment.Left,
+			}),
+			self._qtyButton,
+			list,
+		},
+	}) :: Frame
+	Decor.gradient(panel, Theme.gradient.panel)
+	panel.Parent = gui
+	self._panel = panel
+end
+
+function MarketController:_refresh(rows: { any })
+	for _, entry in rows do
+		local ref = self._rows[entry.id]
+		if ref then
+			ref.price.Text = ("$%.1f"):format(entry.price)
+			local trend = ref.trend :: TextLabel
+			if entry.price &gt; entry.prev + 0.001 then
+				trend.Text = "▲"
+				trend.TextColor3 = Theme.color.good
+			elseif entry.price &lt; entry.prev - 0.001 then
+				trend.Text = "▼"
+				trend.TextColor3 = Theme.color.bad
+			else
+				trend.Text = "–"
+				trend.TextColor3 = Theme.color.textDim
+			end
+			-- Tint the price by how it compares to its baseline.
+			ref.price.TextColor3 = entry.price &gt;= entry.base and Theme.color.text or Theme.color.good
+		end
+	end
+end
+
+function MarketController:Start()
+	local HudController = require(script.Parent.HudController)
+
+	self:_build()
+	HudController:AddButton("💱 Market", function()
+		if self._panel then
+			Motion.toggle(self._panel)
+		end
+	end)
+
+	Net.onEvent(NetRoutes.MARKET_SYNC, function(rows)
+		if typeof(rows) == "table" then
+			self:_refresh(rows)
+		end
+	end)
+end
+
+return MarketController
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000052"><Properties><string name="Name">MilitaryController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/MilitaryController.luau
 	The (optional) armed-forces panel: recruit and disband army, navy and air
@@ -7494,7 +8078,7 @@ function MilitaryController:Start()
 end
 
 return MilitaryController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000050"><Properties><string name="Name">NotificationController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000053"><Properties><string name="Name">NotificationController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/NotificationController.luau
 	Renders transient server notifications as stacked toasts in the top-right.
@@ -7630,7 +8214,7 @@ function NotificationController:Start()
 end
 
 return NotificationController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000051"><Properties><string name="Name">PoliticsController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000054"><Properties><string name="Name">PoliticsController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/PoliticsController.luau
 	The governance panel: adjust the tax rate, switch government type, and
@@ -7911,7 +8495,7 @@ function PoliticsController:Start()
 end
 
 return PoliticsController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000052"><Properties><string name="Name">ResearchController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000055"><Properties><string name="Name">ResearchController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/ResearchController.luau
 	The technology panel. Lists every tech grouped by branch with a live status —
@@ -8156,7 +8740,7 @@ function ResearchController:Start()
 end
 
 return ResearchController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000053"><Properties><string name="Name">StateController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000056"><Properties><string name="Name">StateController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/StateController.luau
 	The client's single source of truth for replicated nation state. It listens
@@ -8216,7 +8800,7 @@ function StateController:Init()
 end
 
 return StateController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000054"><Properties><string name="Name">TerritoryController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000057"><Properties><string name="Name">TerritoryController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/TerritoryController.luau
 	The world map: a grid of claimable regions laid out from the Regions config
@@ -8447,7 +9031,7 @@ function TerritoryController:Start()
 end
 
 return TerritoryController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000055"><Properties><string name="Name">WorldController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000058"><Properties><string name="Name">WorldController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/WorldController.luau
 	Builds the 3D city view: a stylized ground with a glowing district grid,
@@ -8509,6 +9093,9 @@ WorldController._distance = 190
 WorldController._pitch = math.rad(56)
 WorldController._flying = false
 WorldController._flyToken = 0
+WorldController._gamepadPan = Vector2.zero
+WorldController._gamepadZoom = 0
+WorldController._pinchStartDist = nil :: number?
 
 -- World-space centre of a region zone, spread out around the central city.
 local function regionWorldPos(def: any): Vector3
@@ -8745,9 +9332,29 @@ function WorldController:_setupCamera()
 		end
 	end)
 
+	-- Two-finger pinch to zoom (touch).
+	UserInputService.TouchPinch:Connect(function(_touchPositions, scale, _velocity, state)
+		if self._flying then
+			return
+		end
+		if state == Enum.UserInputState.Begin then
+			self._pinchStartDist = self._distance
+		elseif state == Enum.UserInputState.Change and self._pinchStartDist and scale &gt; 0 then
+			self._distance = math.clamp(self._pinchStartDist / scale, 60, 420)
+		end
+	end)
+
 	UserInputService.InputChanged:Connect(function(input, gameProcessed)
 		if self._flying then
 			return -- manual control is frozen during a cinematic fly
+		end
+		-- Gamepad: left stick pans, right stick zooms (stored, applied per frame).
+		if input.KeyCode == Enum.KeyCode.Thumbstick1 then
+			self._gamepadPan = Vector2.new(input.Position.X, input.Position.Y)
+			return
+		elseif input.KeyCode == Enum.KeyCode.Thumbstick2 then
+			self._gamepadZoom = input.Position.Y
+			return
 		end
 		if input.UserInputType == Enum.UserInputType.MouseWheel then
 			self._distance = math.clamp(self._distance - input.Position.Z * 18, 60, 420)
@@ -8783,6 +9390,14 @@ function WorldController:_setupCamera()
 			end
 			if move.Magnitude &gt; 0 then
 				self._focus += move.Unit * (self._distance * 0.02)
+			end
+			-- Gamepad left-stick pan (deadzone) and right-stick zoom.
+			if self._gamepadPan.Magnitude &gt; 0.15 then
+				self._focus += Vector3.new(self._gamepadPan.X, 0, -self._gamepadPan.Y)
+					* (self._distance * 0.03)
+			end
+			if math.abs(self._gamepadZoom) &gt; 0.15 then
+				self._distance = math.clamp(self._distance - self._gamepadZoom * 6, 60, 420)
 			end
 			self._focus = Vector3.new(
 				math.clamp(self._focus.X, -WORLD_RADIUS, WORLD_RADIUS),
@@ -9041,7 +9656,7 @@ function WorldController:Start()
 end
 
 return WorldController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000056"><Properties><string name="Name">WorldStateController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000059"><Properties><string name="Name">WorldStateController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/WorldStateController.luau
 	Client store for world-scope data that isn't part of the player's own nation:
@@ -9103,7 +9718,7 @@ function WorldStateController:Init()
 end
 
 return WorldStateController
-</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000065"><Properties><string name="Name">UI</string></Properties><Item class="Folder" referent="RBX00000058"><Properties><string name="Name">Components</string></Properties></Item><Item class="ModuleScript" referent="RBX00000059"><Properties><string name="Name">Create</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000068"><Properties><string name="Name">UI</string></Properties><Item class="Folder" referent="RBX00000061"><Properties><string name="Name">Components</string></Properties></Item><Item class="ModuleScript" referent="RBX00000062"><Properties><string name="Name">Create</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Create.luau
 	A tiny declarative helper for building Instance trees without the noise of
@@ -9163,7 +9778,7 @@ local callable = setmetatable(Create, {
 
 -- The `any` cast lets callers use both `Create("Frame")` and `Create.Children`.
 return (callable :: any) :: (((className: string, props: { [any]: any }?) -&gt; Instance) &amp; typeof(Create))
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000060"><Properties><string name="Name">Decor</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000063"><Properties><string name="Name">Decor</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Decor.luau
 	Small cosmetic helpers so every panel, chip and button gets the same finish
@@ -9231,7 +9846,7 @@ function Decor.shadow(frame: GuiObject): Frame
 end
 
 return Decor
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000061"><Properties><string name="Name">Format</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000064"><Properties><string name="Name">Format</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Format.luau
 	Number/text formatting shared by every panel, so "12.3k" and "+4.5%" look the
@@ -9269,7 +9884,7 @@ function Format.round(n: number): string
 end
 
 return Format
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000062"><Properties><string name="Name">Graph</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000065"><Properties><string name="Name">Graph</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Graph.luau
 	A tiny, asset-free bar graph. Given a container size it returns the frame plus
@@ -9350,7 +9965,7 @@ function Graph.new(size: UDim2): (Frame, (values: { number }, color: Color3?) -&
 end
 
 return Graph
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000063"><Properties><string name="Name">Motion</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000066"><Properties><string name="Name">Motion</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Motion.luau
 	Tiny animation helpers so panels don't just snap on/off. Uses a UIScale child
@@ -9398,7 +10013,7 @@ function Motion.toggle(frame: GuiObject)
 end
 
 return Motion
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000064"><Properties><string name="Name">Theme</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000067"><Properties><string name="Name">Theme</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Theme.luau
 	Design tokens for the whole interface. One place to restyle the game. Tuned
@@ -9450,5 +10065,5 @@ Theme.corner = UDim.new(0, 12)
 Theme.pad = 10
 
 return Theme
-</ProtectedString></Properties></Item></Item></Item></Item></Item><Item class="Workspace" referent="RBX00000071"><Properties><bool name="StreamingEnabled">true</bool></Properties></Item><Item class="Players" referent="RBX00000072"><Properties><bool name="CharacterAutoLoads">false</bool></Properties></Item>
+</ProtectedString></Properties></Item></Item></Item></Item></Item><Item class="Workspace" referent="RBX00000074"><Properties><bool name="StreamingEnabled">true</bool></Properties></Item><Item class="Players" referent="RBX00000075"><Properties><bool name="CharacterAutoLoads">false</bool></Properties></Item>
 </roblox>

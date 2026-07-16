@@ -16,6 +16,7 @@ local Config = {
 	Regions = require(script.Regions),
 	MilitaryUnits = require(script.MilitaryUnits),
 	ServerSettings = require(script.ServerSettings),
+	Market = require(script.Market),
 }
 
 return Config

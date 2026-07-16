@@ -32,12 +32,17 @@ local NetRoutes = {
 	RECRUIT_UNITS = "military/recruit",
 	DISBAND_UNITS = "military/disband",
 
+	-- Market.
+	MARKET_BUY = "market/buy",
+	MARKET_SELL = "market/sell",
+
 	-- Server -> client pushes.
 	STATE_SYNC = "state/sync",
 	NOTIFY = "state/notify",
 	TRADE_INBOX = "diplomacy/inbox",
 	WORLD_SYNC = "world/sync",
 	TERRITORY_SYNC = "territory/sync",
+	MARKET_SYNC = "market/sync",
 }
 
 return NetRoutes

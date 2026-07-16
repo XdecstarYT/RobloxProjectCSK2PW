@@ -60,6 +60,9 @@ WorldController._distance = 190
 WorldController._pitch = math.rad(56)
 WorldController._flying = false
 WorldController._flyToken = 0
+WorldController._gamepadPan = Vector2.zero
+WorldController._gamepadZoom = 0
+WorldController._pinchStartDist = nil :: number?
 
 -- World-space centre of a region zone, spread out around the central city.
 local function regionWorldPos(def: any): Vector3
@@ -296,9 +299,29 @@ function WorldController:_setupCamera()
 		end
 	end)
 
+	-- Two-finger pinch to zoom (touch).
+	UserInputService.TouchPinch:Connect(function(_touchPositions, scale, _velocity, state)
+		if self._flying then
+			return
+		end
+		if state == Enum.UserInputState.Begin then
+			self._pinchStartDist = self._distance
+		elseif state == Enum.UserInputState.Change and self._pinchStartDist and scale > 0 then
+			self._distance = math.clamp(self._pinchStartDist / scale, 60, 420)
+		end
+	end)
+
 	UserInputService.InputChanged:Connect(function(input, gameProcessed)
 		if self._flying then
 			return -- manual control is frozen during a cinematic fly
+		end
+		-- Gamepad: left stick pans, right stick zooms (stored, applied per frame).
+		if input.KeyCode == Enum.KeyCode.Thumbstick1 then
+			self._gamepadPan = Vector2.new(input.Position.X, input.Position.Y)
+			return
+		elseif input.KeyCode == Enum.KeyCode.Thumbstick2 then
+			self._gamepadZoom = input.Position.Y
+			return
 		end
 		if input.UserInputType == Enum.UserInputType.MouseWheel then
 			self._distance = math.clamp(self._distance - input.Position.Z * 18, 60, 420)
@@ -334,6 +357,14 @@ function WorldController:_setupCamera()
 			end
 			if move.Magnitude > 0 then
 				self._focus += move.Unit * (self._distance * 0.02)
+			end
+			-- Gamepad left-stick pan (deadzone) and right-stick zoom.
+			if self._gamepadPan.Magnitude > 0.15 then
+				self._focus += Vector3.new(self._gamepadPan.X, 0, -self._gamepadPan.Y)
+					* (self._distance * 0.03)
+			end
+			if math.abs(self._gamepadZoom) > 0.15 then
+				self._distance = math.clamp(self._distance - self._gamepadZoom * 6, 60, 420)
 			end
 			self._focus = Vector3.new(
 				math.clamp(self._focus.X, -WORLD_RADIUS, WORLD_RADIUS),
