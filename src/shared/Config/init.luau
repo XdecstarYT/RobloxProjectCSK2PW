@@ -18,6 +18,7 @@ local Config = {
 	ServerSettings = require(script.ServerSettings),
 	Market = require(script.Market),
 	Objectives = require(script.Objectives),
+	Audio = require(script.Audio),
 }
 
 return Config

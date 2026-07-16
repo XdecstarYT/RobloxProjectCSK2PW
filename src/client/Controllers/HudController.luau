@@ -126,7 +126,14 @@ function HudController:AddButton(text: string, onClick: () -> ()): TextButton
 			Create("UIPadding", { PaddingLeft = UDim.new(0, 16), PaddingRight = UDim.new(0, 16) }),
 			Create("UISizeConstraint", { MinSize = Vector2.new(96, 44) }),
 		},
-		[Create.Event] = { Activated = onClick },
+		[Create.Event] = {
+			Activated = function()
+				pcall(function()
+					require(script.Parent.SoundController):PlayClick()
+				end)
+				onClick()
+			end,
+		},
 	}) :: TextButton
 	Decor.gradient(button, Theme.gradient.chip)
 	button.Parent = bar

@@ -17,6 +17,8 @@ local AmbianceController = {
 	Name = "AmbianceController",
 }
 
+AmbianceController._effects = nil :: { any }?
+
 -- Fetch-or-create a single instance of `className` under `parent`.
 local function ensure(parent: Instance, className: string, name: string): Instance
 	local existing = parent:FindFirstChild(name)
@@ -74,6 +76,26 @@ function AmbianceController:Init()
 	grade.Contrast = 0.1
 	grade.Saturation = 0.14
 	grade.TintColor = Color3.fromRGB(255, 248, 240)
+
+	-- Only PostEffects have an `Enabled` flag; Atmosphere stays on (it's cheap).
+	self._effects = { bloom, sun, grade }
+end
+
+--- Toggle the heavier post-processing for lower-end devices.
+function AmbianceController:SetEffectsEnabled(enabled: boolean)
+	for _, effect in self._effects or {} do
+		effect.Enabled = enabled
+	end
+end
+
+function AmbianceController:Start()
+	local ClientPrefs = require(script.Parent.Parent.ClientPrefs)
+	self:SetEffectsEnabled(ClientPrefs.get("effectsEnabled"))
+	ClientPrefs.Changed:Connect(function(key, value)
+		if key == "effectsEnabled" then
+			self:SetEffectsEnabled(value)
+		end
+	end)
 end
 
 return AmbianceController

@@ -26,11 +26,15 @@ system, all real, non-placeholder Luau that runs and interacts today.
 | **AI nations** | ✅ | Five rivals with strategy archetypes; grow, research, expand, trade & ally |
 | **Territory** | ✅ | Shared world map; claim regions with influence (adjacency + scaling cost); per-region income |
 | **Military (optional)** | ✅ | Recruit army/navy/air, upkeep, strength; forceful expansion vs AI; gated by a server setting |
+| **Global market** | ✅ | Dynamic supply/demand prices with a buy/sell spread; buy and sell commodities for money |
 | **World events** | ✅ | Periodic national events and rarer global events with real consequences |
+| **Objectives** | ✅ | 12 milestone goals evaluated server-side with one-time rewards; persisted, never paid twice |
 | **Leaderboard** | ✅ | Live global power ranking of every nation (players + AI) |
-| **Client UI** | ✅ | HUD plus panels for build, politics, research, diplomacy, territory, military & ranks |
-| **3D world** | ✅ | Cinematic lighting/atmosphere, stylized neon city, RTS camera (pan/zoom, PC + touch) |
-| **Onboarding** | ✅ | First-join tutorial tips, guarded by a persisted flag |
+| **Client UI** | ✅ | HUD plus panels for build, politics, research, economy, diplomacy, territory, military, market, goals, ranks & settings |
+| **3D world & camera** | ✅ | Cinematic lighting/atmosphere, stylized neon city, physical region zones, GTA-style fly-to, RTS camera |
+| **Cross-platform** | ✅ | Mouse, touch (reticle + Place button, pinch-zoom) and gamepad (stick pan/zoom, A/B/R1) controls |
+| **Onboarding & settings** | ✅ | Interactive step-by-step tutorial (persisted flag, replayable) and an options menu (volume, mute, effects) |
+| **Audio scaffold** | ✅ | Music/SFX buses wired to clicks & notifications; paste asset ids into `Config/Audio` to enable |
 
 Every important system is original, server-authoritative code. See
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for build history and future ideas, and

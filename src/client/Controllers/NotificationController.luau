@@ -72,6 +72,14 @@ function NotificationController:Show(severity: string, title: string, body: stri
 	if not container then
 		return
 	end
+	local ClientPrefs = require(script.Parent.Parent.ClientPrefs)
+	if ClientPrefs.get("muteNotifications") then
+		return
+	end
+	pcall(function()
+		local sound = require(script.Parent.SoundController)
+		sound:PlaySfx(severity == "error" and "error" or (severity == "success" and "success" or "notify"))
+	end)
 	local toast = buildToast(severity, title, body)
 	toast.Position = UDim2.new(1, 20, 0, 0)
 	toast.Parent = container

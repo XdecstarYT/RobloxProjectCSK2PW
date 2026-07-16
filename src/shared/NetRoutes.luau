@@ -17,6 +17,7 @@ local NetRoutes = {
 	TOGGLE_LAW = "politics/toggleLaw",
 	START_RESEARCH = "research/start",
 	RENAME_NATION = "nation/rename",
+	TUTORIAL_DONE = "nation/tutorialDone",
 
 	-- Diplomacy.
 	PROPOSE_TRADE = "diplomacy/propose",

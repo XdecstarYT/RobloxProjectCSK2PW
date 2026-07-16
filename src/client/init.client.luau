@@ -20,6 +20,7 @@ local ORDER = {
 	"StateController",
 	"WorldStateController",
 	"AmbianceController",
+	"SoundController",
 	"NotificationController",
 	"HudController",
 	"WorldController",
@@ -33,6 +34,8 @@ local ORDER = {
 	"MarketController",
 	"ObjectivesController",
 	"LeaderboardController",
+	"SettingsController",
+	"TutorialController",
 }
 
 for _, name in ORDER do

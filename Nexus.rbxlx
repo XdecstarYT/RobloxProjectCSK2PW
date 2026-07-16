@@ -3,7 +3,7 @@
 <Meta name="ExplicitAutoJoints">true</Meta>
 <External>null</External>
 <External>nil</External>
-<Item class="ReplicatedStorage" referent="RBX00000073"><Properties></Properties><Item class="Folder" referent="RBX00000022"><Properties><string name="Name">Nexus</string></Properties><Item class="ModuleScript" referent="RBX00000012"><Properties><string name="Name">Config</string><ProtectedString name="Source">--!strict
+<Item class="ReplicatedStorage" referent="RBX00000078"><Properties></Properties><Item class="Folder" referent="RBX00000023"><Properties><string name="Name">Nexus</string></Properties><Item class="ModuleScript" referent="RBX00000013"><Properties><string name="Name">Config</string><ProtectedString name="Source">--!strict
 --[[
 	Config/init.luau
 	Aggregates every configuration table behind one require. Because this folder
@@ -23,10 +23,40 @@ local Config = {
 	ServerSettings = require(script.ServerSettings),
 	Market = require(script.Market),
 	Objectives = require(script.Objectives),
+	Audio = require(script.Audio),
 }
 
 return Config
-</ProtectedString></Properties><Item class="ModuleScript" referent="RBX00000001"><Properties><string name="Name">Balance</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties><Item class="ModuleScript" referent="RBX00000001"><Properties><string name="Name">Audio</string><ProtectedString name="Source">--!strict
+--[[
+	Config/Audio.luau
+	Sound asset ids and default volumes. IDs are intentionally blank — this is the
+	"drop-in" point for the audio you add from the Toolbox/Creator Store. Paste a
+	`rbxassetid://...` into any field and SoundController will use it; empty fields
+	are simply silent, so the game runs fine with no audio configured.
+]]
+
+local Audio = {
+	volumes = {
+		music = 0.4,
+		sfx = 0.7,
+	},
+
+	-- Looping background track (leave "" for silence).
+	music = "",
+
+	-- One-shot sound effects, played by name via SoundController:PlaySfx(name).
+	sfx = {
+		click = "",
+		build = "",
+		success = "",
+		error = "",
+		notify = "",
+	},
+}
+
+return Audio
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000002"><Properties><string name="Name">Balance</string><ProtectedString name="Source">--!strict
 --[[
 	Config/Balance.luau
 	Every tunable number that shapes the feel of the game. Isolated from code so
@@ -125,7 +155,7 @@ Balance.CONSTRUCTION = {
 }
 
 return Balance
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000002"><Properties><string name="Name">Buildings</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000003"><Properties><string name="Name">Buildings</string><ProtectedString name="Source">--!strict
 --[[
 	Config/Buildings.luau
 	The catalogue every construction decision reads from. Each entry is a pure
@@ -405,7 +435,7 @@ define({
 })
 
 return Buildings
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000003"><Properties><string name="Name">Governments</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000004"><Properties><string name="Name">Governments</string><ProtectedString name="Source">--!strict
 --[[
 	Config/Governments.luau
 	Government archetypes. Each one reshapes the game through a bundle of
@@ -542,7 +572,7 @@ local Governments: { [GovernmentId]: GovernmentDef } = {
 }
 
 return Governments
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000004"><Properties><string name="Name">Laws</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000005"><Properties><string name="Name">Laws</string><ProtectedString name="Source">--!strict
 --[[
 	Config/Laws.luau
 	Toggleable national policies. Each law is a trade-off applied while active,
@@ -623,7 +653,7 @@ local Laws: { [string]: LawDef } = {
 }
 
 return Laws
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000005"><Properties><string name="Name">Market</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000006"><Properties><string name="Name">Market</string><ProtectedString name="Source">--!strict
 --[[
 	Config/Market.luau
 	Tuning for the global commodity market. Prices are money-per-unit and move
@@ -659,7 +689,7 @@ Market.resources = {
 Market.order = { "materials", "food", "research", "influence" }
 
 return Market
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000006"><Properties><string name="Name">MilitaryUnits</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000007"><Properties><string name="Name">MilitaryUnits</string><ProtectedString name="Source">--!strict
 --[[
 	Config/MilitaryUnits.luau
 	Unit definitions for the (optional) military layer. Keys match the fields of
@@ -712,7 +742,7 @@ local MilitaryUnits: { [string]: UnitDef } = {
 }
 
 return MilitaryUnits
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000007"><Properties><string name="Name">Objectives</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000008"><Properties><string name="Name">Objectives</string><ProtectedString name="Source">--!strict
 --[[
 	Config/Objectives.luau
 	Milestone objectives that give the game direction and reward progress. Each is
@@ -821,7 +851,7 @@ local Objectives: { ObjectiveDef } = {
 }
 
 return Objectives
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000008"><Properties><string name="Name">Regions</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000009"><Properties><string name="Name">Regions</string><ProtectedString name="Source">--!strict
 --[[
 	Config/Regions.luau
 	The shared world map of claimable regions. Regions sit on a grid; two regions
@@ -866,7 +896,7 @@ define({ id = "aurora_steppe", displayName = "Aurora Steppe", col = 2, row = 2, 
 define({ id = "meridian_cape", displayName = "Meridian Cape", col = 3, row = 2, cost = 70, value = 5, bonus = { influence = 6 } })
 
 return Regions
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000009"><Properties><string name="Name">Resources</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000010"><Properties><string name="Name">Resources</string><ProtectedString name="Source">--!strict
 --[[
 	Config/Resources.luau
 	Display metadata for each resource. Simulation math lives elsewhere; this is
@@ -935,7 +965,7 @@ local Resources: { [string]: ResourceMeta } = {
 }
 
 return Resources
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000010"><Properties><string name="Name">ServerSettings</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000011"><Properties><string name="Name">ServerSettings</string><ProtectedString name="Source">--!strict
 --[[
 	Config/ServerSettings.luau
 	Server-wide toggles a place owner can flip before shipping. Read by both the
@@ -951,7 +981,7 @@ local ServerSettings = {
 }
 
 return ServerSettings
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000011"><Properties><string name="Name">Technologies</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000012"><Properties><string name="Name">Technologies</string><ProtectedString name="Source">--!strict
 --[[
 	Config/Technologies.luau
 	The research tree. Each tech gates buildings and/or applies named modifiers
@@ -1118,7 +1148,7 @@ define({
 })
 
 return Technologies
-</ProtectedString></Properties></Item></Item><Item class="ModuleScript" referent="RBX00000013"><Properties><string name="Name">Constants</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item><Item class="ModuleScript" referent="RBX00000014"><Properties><string name="Name">Constants</string><ProtectedString name="Source">--!strict
 --[[
 	Constants.luau
 	Immutable, project-wide constants. No gameplay balance numbers live here —
@@ -1163,7 +1193,7 @@ Constants.GDP_HISTORY_LENGTH = 60
 Constants.RESOURCE_ORDER = { "money", "materials", "energy", "food", "research", "influence" } :: { string }
 
 return Constants
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000014"><Properties><string name="Name">Logger</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000015"><Properties><string name="Name">Logger</string><ProtectedString name="Source">--!strict
 --[[
 	Logger.luau
 	Namespaced, level-filtered logging. Every subsystem creates its own logger
@@ -1241,7 +1271,7 @@ function Logger:Error(...: any)
 end
 
 return Logger
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000015"><Properties><string name="Name">Net</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000016"><Properties><string name="Name">Net</string><ProtectedString name="Source">--!strict
 --[[
 	Net.luau
 	The single, guarded gateway between client and server.
@@ -1497,7 +1527,7 @@ else
 end
 
 return Net
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000016"><Properties><string name="Name">NetRoutes</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000017"><Properties><string name="Name">NetRoutes</string><ProtectedString name="Source">--!strict
 --[[
 	NetRoutes.luau
 	The canonical list of network route names. Both sides import these constants
@@ -1516,6 +1546,7 @@ local NetRoutes = {
 	TOGGLE_LAW = "politics/toggleLaw",
 	START_RESEARCH = "research/start",
 	RENAME_NATION = "nation/rename",
+	TUTORIAL_DONE = "nation/tutorialDone",
 
 	-- Diplomacy.
 	PROPOSE_TRADE = "diplomacy/propose",
@@ -1545,7 +1576,7 @@ local NetRoutes = {
 }
 
 return NetRoutes
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000017"><Properties><string name="Name">ResourceMath</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000018"><Properties><string name="Name">ResourceMath</string><ProtectedString name="Source">--!strict
 --[[
 	ResourceMath.luau
 	Pure helpers for combining ResourceBags. The server uses these to mutate the
@@ -1616,7 +1647,7 @@ function ResourceMath.grant(wallet: ResourceBag, gain: ResourceBag)
 end
 
 return ResourceMath
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000018"><Properties><string name="Name">Signal</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000019"><Properties><string name="Name">Signal</string><ProtectedString name="Source">--!strict
 --[[
 	Signal.luau
 	A minimal, original event/observer primitive.
@@ -1718,7 +1749,7 @@ function Signal:Destroy()
 end
 
 return Signal
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000019"><Properties><string name="Name">TableUtil</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000020"><Properties><string name="Name">TableUtil</string><ProtectedString name="Source">--!strict
 --[[
 	TableUtil.luau
 	Small, dependency-free helpers used by the data and simulation layers.
@@ -1789,7 +1820,7 @@ function TableUtil.shallowEqual(a: { [any]: any }, b: { [any]: any }): boolean
 end
 
 return TableUtil
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000020"><Properties><string name="Name">Types</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000021"><Properties><string name="Name">Types</string><ProtectedString name="Source">--!strict
 --[[
 	Types.luau
 	Central typed-Luau definitions shared by server and client.
@@ -1944,7 +1975,7 @@ export type TechDef = {
 }
 
 return {}
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000021"><Properties><string name="Name">WorldGrid</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000022"><Properties><string name="Name">WorldGrid</string><ProtectedString name="Source">--!strict
 --[[
 	WorldGrid.luau
 	The mapping between the logical build grid (integer tiles the server stores)
@@ -1988,7 +2019,7 @@ function WorldGrid.worldToTile(position: Vector3): (number, number)
 end
 
 return WorldGrid
-</ProtectedString></Properties></Item></Item></Item><Item class="ServerScriptService" referent="RBX00000074"><Properties></Properties><Item class="Script" referent="RBX00000045"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item></Item><Item class="ServerScriptService" referent="RBX00000079"><Properties></Properties><Item class="Script" referent="RBX00000046"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
 --[[
 	init.server.luau
 	Server bootstrap. Requires every service, registers it with the Framework,
@@ -2035,7 +2066,7 @@ end
 Framework.start()
 
 print("[Nexus] server online — Project Nexus nation simulator")
-</ProtectedString></Properties><Item class="ModuleScript" referent="RBX00000023"><Properties><string name="Name">Framework</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties><Item class="ModuleScript" referent="RBX00000024"><Properties><string name="Name">Framework</string><ProtectedString name="Source">--!strict
 --[[
 	Framework.luau
 	A tiny service locator with a two-phase lifecycle.
@@ -2113,7 +2144,7 @@ function Framework.start()
 end
 
 return Framework
-</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000041"><Properties><string name="Name">Services</string></Properties><Item class="ModuleScript" referent="RBX00000024"><Properties><string name="Name">AIService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000042"><Properties><string name="Name">Services</string></Properties><Item class="ModuleScript" referent="RBX00000025"><Properties><string name="Name">AIService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/AIService.luau
 	Server-owned AI nations that share the exact same Nation shape as players, so
@@ -2398,7 +2429,7 @@ function AIService:Start()
 end
 
 return AIService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000025"><Properties><string name="Name">CitizenService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000026"><Properties><string name="Name">CitizenService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/CitizenService.luau
 	The populace as a living system. Each tick it moves education and health
@@ -2509,7 +2540,7 @@ function CitizenService:Init()
 end
 
 return CitizenService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000026"><Properties><string name="Name">CityService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000027"><Properties><string name="Name">CityService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/CityService.luau
 	The authoritative city builder. Owns every building a nation places and is
@@ -2913,7 +2944,7 @@ function CityService:Start()
 end
 
 return CityService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000027"><Properties><string name="Name">DataService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000028"><Properties><string name="Name">DataService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/DataService.luau
 	Original, session-safe persistence for player profiles.
@@ -3341,7 +3372,7 @@ function DataService:Start()
 end
 
 return DataService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000028"><Properties><string name="Name">DiplomacyService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000029"><Properties><string name="Name">DiplomacyService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/DiplomacyService.luau
 	Player-to-player (and player-to-AI) diplomacy: escrowed resource trades and
@@ -3770,7 +3801,7 @@ function DiplomacyService:Start()
 end
 
 return DiplomacyService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000029"><Properties><string name="Name">EconomyService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000030"><Properties><string name="Name">EconomyService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/EconomyService.luau
 	The master simulation tick. Every ECONOMY_TICK it walks each live nation and,
@@ -4000,7 +4031,7 @@ function EconomyService:Start()
 end
 
 return EconomyService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000030"><Properties><string name="Name">EventService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000031"><Properties><string name="Name">EventService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/EventService.luau
 	Keeps the world unpredictable: periodic national events hit a random nation,
@@ -4183,7 +4214,7 @@ function EventService:Start()
 end
 
 return EventService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000031"><Properties><string name="Name">MarketService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000032"><Properties><string name="Name">MarketService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/MarketService.luau
 	A living global commodity market. Prices update every market tick from
@@ -4350,7 +4381,7 @@ function MarketService:Start()
 end
 
 return MarketService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000032"><Properties><string name="Name">MilitaryService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000033"><Properties><string name="Name">MilitaryService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/MilitaryService.luau
 	The optional military layer: recruit and disband units. Gated behind
@@ -4460,7 +4491,7 @@ function MilitaryService:Start()
 end
 
 return MilitaryService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000033"><Properties><string name="Name">NotificationService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000034"><Properties><string name="Name">NotificationService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/NotificationService.luau
 	Server-authored, transient messages to a player's HUD: "Not enough
@@ -4499,7 +4530,7 @@ function NotificationService:Broadcast(severity: Severity, title: string, body: 
 end
 
 return NotificationService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000034"><Properties><string name="Name">ObjectiveService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000035"><Properties><string name="Name">ObjectiveService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/ObjectiveService.luau
 	Evaluates milestone objectives for each player's nation and grants a one-time
@@ -4565,7 +4596,7 @@ function ObjectiveService:Start()
 end
 
 return ObjectiveService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000035"><Properties><string name="Name">OnboardingService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000036"><Properties><string name="Name">OnboardingService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/OnboardingService.luau
 	Gently teaches a brand-new nation the ropes with a short, staggered sequence
@@ -4577,10 +4608,11 @@ return ObjectiveService
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Logger = require(ReplicatedStorage.Nexus.Logger)
+local Net = require(ReplicatedStorage.Nexus.Net)
+local NetRoutes = require(ReplicatedStorage.Nexus.NetRoutes)
 local ServerSettings = require(ReplicatedStorage.Nexus.Config.ServerSettings)
 
 local DataService = require(script.Parent.DataService)
-local NotificationService = require(script.Parent.NotificationService)
 local ReplicationService = require(script.Parent.ReplicationService)
 
 local log = Logger.new("OnboardingService")
@@ -4589,43 +4621,26 @@ local OnboardingService = {
 	Name = "OnboardingService",
 }
 
--- `delay` is the gap before each tip (waited sequentially).
-local TIPS = {
-	{ delay = 3, sev = "info", title = "Welcome to Nexus!", body = "Grow your settlement into a superpower. Let's begin." },
-	{ delay = 6, sev = "info", title = "Power the city", body = "Open 🏗 Build and place a Coal Plant, then a Farm and Housing." },
-	{ delay = 8, sev = "info", title = "Govern wisely", body = "Set taxes, laws and government type in 🏛 Politics." },
-	{ delay = 8, sev = "info", title = "Advance", body = "Unlock buildings and bonuses in 🔬 Research." },
-	{ delay = 8, sev = "info", title = "Go global", body = "Trade in 🤝 Diplomacy, expand in 🗺 Territory, climb 🏆 Ranks." },
-}
-
 function OnboardingService:Start()
+	-- The step-by-step guidance now lives in the interactive TutorialController;
+	-- this service just persists the "tutorial finished" flag it reports.
+	Net.handleRequest(NetRoutes.TUTORIAL_DONE, function(player)
+		local nation = DataService:GetNation(player)
+		if nation then
+			nation.flags.tutorialDone = true
+			ReplicationService:MarkDirty(player)
+		end
+		return { success = true }
+	end, { rate = 2, per = 1 })
+
 	if not ServerSettings.showStartingHints then
 		return
 	end
-	DataService.Loaded:Connect(function(player, profile)
-		local nation = profile.nation
-		if nation.flags.onboarded then
-			return
-		end
-		-- Mark done up front so a mid-sequence disconnect never repeats it.
-		nation.flags.onboarded = true
-		ReplicationService:MarkDirty(player)
-
-		task.spawn(function()
-			for _, tip in TIPS do
-				task.wait(tip.delay)
-				if not player.Parent then
-					return
-				end
-				NotificationService:Send(player, tip.sev, tip.title, tip.body)
-			end
-		end)
-	end)
 	log:Info("onboarding ready")
 end
 
 return OnboardingService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000036"><Properties><string name="Name">PoliticsService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000037"><Properties><string name="Name">PoliticsService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/PoliticsService.luau
 	Government, laws and the public's verdict on your rule. Players set the tax
@@ -4860,7 +4875,7 @@ function PoliticsService:Start()
 end
 
 return PoliticsService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000037"><Properties><string name="Name">ReplicationService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000038"><Properties><string name="Name">ReplicationService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/ReplicationService.luau
 	The only place server state reaches a client. Services never call Net
@@ -4955,7 +4970,7 @@ function ReplicationService:Start()
 end
 
 return ReplicationService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000038"><Properties><string name="Name">ResearchService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000039"><Properties><string name="Name">ResearchService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/ResearchService.luau
 	Drives the technology tree. Research accumulates as the `research` resource
@@ -5067,7 +5082,7 @@ function ResearchService:Start()
 end
 
 return ResearchService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000039"><Properties><string name="Name">TerritoryService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000040"><Properties><string name="Name">TerritoryService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/TerritoryService.luau
 	Authoritative ownership of the shared world map. Nations spend influence to
@@ -5328,7 +5343,7 @@ function TerritoryService:Start()
 end
 
 return TerritoryService
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000040"><Properties><string name="Name">WorldService</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000041"><Properties><string name="Name">WorldService</string><ProtectedString name="Source">--!strict
 --[[
 	Services/WorldService.luau
 	The registry that ties every nation — human or AI — into one world. It resolves
@@ -5472,7 +5487,7 @@ function WorldService:Start()
 end
 
 return WorldService
-</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000044"><Properties><string name="Name">Util</string></Properties><Item class="ModuleScript" referent="RBX00000042"><Properties><string name="Name">Modifiers</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000045"><Properties><string name="Name">Util</string></Properties><Item class="ModuleScript" referent="RBX00000043"><Properties><string name="Name">Modifiers</string><ProtectedString name="Source">--!strict
 --[[
 	Util/Modifiers.luau
 	Resolves a nation's active government, unlocked technologies, and enacted
@@ -5598,7 +5613,7 @@ function Modifiers.resolve(nation: Nation): Resolved
 end
 
 return Modifiers
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000043"><Properties><string name="Name">Validation</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000044"><Properties><string name="Name">Validation</string><ProtectedString name="Source">--!strict
 --[[
 	Util/Validation.luau
 	Server-side guards for untrusted client payloads. Every request handler runs
@@ -5647,7 +5662,7 @@ function Validation.readPosition(payload: any): ({ x: number, z: number })?
 end
 
 return Validation
-</ProtectedString></Properties></Item></Item></Item></Item><Item class="StarterPlayer" referent="RBX00000076"><Properties></Properties><Item class="StarterPlayerScripts" referent="RBX00000075"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX00000072"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item></Item></Item><Item class="StarterPlayer" referent="RBX00000081"><Properties></Properties><Item class="StarterPlayerScripts" referent="RBX00000080"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX00000077"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
 --[[
 	init.client.luau
 	Client bootstrap. Registers every controller with the ClientFramework, then
@@ -5669,6 +5684,7 @@ local ORDER = {
 	"StateController",
 	"WorldStateController",
 	"AmbianceController",
+	"SoundController",
 	"NotificationController",
 	"HudController",
 	"WorldController",
@@ -5682,6 +5698,8 @@ local ORDER = {
 	"MarketController",
 	"ObjectivesController",
 	"LeaderboardController",
+	"SettingsController",
+	"TutorialController",
 }
 
 for _, name in ORDER do
@@ -5693,7 +5711,7 @@ end
 ClientFramework.start()
 
 print("[Nexus] client online for " .. Players.LocalPlayer.Name)
-</ProtectedString></Properties><Item class="ModuleScript" referent="RBX00000046"><Properties><string name="Name">ClientFramework</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties><Item class="ModuleScript" referent="RBX00000047"><Properties><string name="Name">ClientFramework</string><ProtectedString name="Source">--!strict
 --[[
 	ClientFramework.luau
 	The client mirror of the server Framework: a controller registry with the
@@ -5758,7 +5776,45 @@ function ClientFramework.start()
 end
 
 return ClientFramework
-</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000063"><Properties><string name="Name">Controllers</string></Properties><Item class="ModuleScript" referent="RBX00000047"><Properties><string name="Name">AmbianceController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000048"><Properties><string name="Name">ClientPrefs</string><ProtectedString name="Source">--!strict
+--[[
+	ClientPrefs.luau
+	A tiny in-memory preferences store shared by the client controllers. Settings
+	writes it; SoundController, AmbianceController and NotificationController read
+	it and react via the Changed signal. Session-local by design (no persistence)
+	— it's the wiring the Settings UI drives.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Signal = require(ReplicatedStorage.Nexus.Signal)
+local Audio = require(ReplicatedStorage.Nexus.Config.Audio)
+
+local ClientPrefs = {
+	Changed = Signal.new() :: any, -- fires (key, value)
+}
+
+local state: { [string]: any } = {
+	musicVolume = Audio.volumes.music,
+	sfxVolume = Audio.volumes.sfx,
+	muteNotifications = false,
+	effectsEnabled = true,
+}
+
+function ClientPrefs.get(key: string): any
+	return state[key]
+end
+
+function ClientPrefs.set(key: string, value: any)
+	if state[key] == value then
+		return
+	end
+	state[key] = value
+	ClientPrefs.Changed:Fire(key, value)
+end
+
+return ClientPrefs
+</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000068"><Properties><string name="Name">Controllers</string></Properties><Item class="ModuleScript" referent="RBX00000049"><Properties><string name="Name">AmbianceController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/AmbianceController.luau
 	Sets the mood: cinematic lighting, atmospheric depth and post-processing.
@@ -5776,6 +5832,8 @@ local Lighting = game:GetService("Lighting")
 local AmbianceController = {
 	Name = "AmbianceController",
 }
+
+AmbianceController._effects = nil :: { any }?
 
 -- Fetch-or-create a single instance of `className` under `parent`.
 local function ensure(parent: Instance, className: string, name: string): Instance
@@ -5834,10 +5892,30 @@ function AmbianceController:Init()
 	grade.Contrast = 0.1
 	grade.Saturation = 0.14
 	grade.TintColor = Color3.fromRGB(255, 248, 240)
+
+	-- Only PostEffects have an `Enabled` flag; Atmosphere stays on (it's cheap).
+	self._effects = { bloom, sun, grade }
+end
+
+--- Toggle the heavier post-processing for lower-end devices.
+function AmbianceController:SetEffectsEnabled(enabled: boolean)
+	for _, effect in self._effects or {} do
+		effect.Enabled = enabled
+	end
+end
+
+function AmbianceController:Start()
+	local ClientPrefs = require(script.Parent.Parent.ClientPrefs)
+	self:SetEffectsEnabled(ClientPrefs.get("effectsEnabled"))
+	ClientPrefs.Changed:Connect(function(key, value)
+		if key == "effectsEnabled" then
+			self:SetEffectsEnabled(value)
+		end
+	end)
 end
 
 return AmbianceController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000048"><Properties><string name="Name">BuildController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000050"><Properties><string name="Name">BuildController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/BuildController.luau
 	Everything the player touches to shape their city:
@@ -6573,7 +6651,7 @@ function BuildController:Start()
 end
 
 return BuildController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000049"><Properties><string name="Name">DiplomacyController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000051"><Properties><string name="Name">DiplomacyController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/DiplomacyController.luau
 	The diplomacy screen: pick another nation, compose a resource-for-resource
@@ -7039,7 +7117,7 @@ function DiplomacyController:Start()
 end
 
 return DiplomacyController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000050"><Properties><string name="Name">EconomyController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000052"><Properties><string name="Name">EconomyController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/EconomyController.luau
 	A statistics dashboard: a live GDP graph (from the replicated gdpHistory), a
@@ -7349,7 +7427,7 @@ function EconomyController:Start()
 end
 
 return EconomyController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000051"><Properties><string name="Name">HudController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000053"><Properties><string name="Name">HudController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/HudController.luau
 	The persistent HUD: a top resource bar, a compact national-stats panel, and a
@@ -7477,7 +7555,14 @@ function HudController:AddButton(text: string, onClick: () -&gt; ()): TextButton
 			Create("UIPadding", { PaddingLeft = UDim.new(0, 16), PaddingRight = UDim.new(0, 16) }),
 			Create("UISizeConstraint", { MinSize = Vector2.new(96, 44) }),
 		},
-		[Create.Event] = { Activated = onClick },
+		[Create.Event] = {
+			Activated = function()
+				pcall(function()
+					require(script.Parent.SoundController):PlayClick()
+				end)
+				onClick()
+			end,
+		},
 	}) :: TextButton
 	Decor.gradient(button, Theme.gradient.chip)
 	button.Parent = bar
@@ -7675,7 +7760,7 @@ function HudController:Start()
 end
 
 return HudController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000052"><Properties><string name="Name">LeaderboardController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000054"><Properties><string name="Name">LeaderboardController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/LeaderboardController.luau
 	A ranked table of every nation in the world (players and AI) by power score.
@@ -7829,7 +7914,7 @@ function LeaderboardController:Start()
 end
 
 return LeaderboardController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000053"><Properties><string name="Name">MarketController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000055"><Properties><string name="Name">MarketController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/MarketController.luau
 	The global commodity market screen: live prices with trend arrows and
@@ -8061,7 +8146,7 @@ function MarketController:Start()
 end
 
 return MarketController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000054"><Properties><string name="Name">MilitaryController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000056"><Properties><string name="Name">MilitaryController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/MilitaryController.luau
 	The (optional) armed-forces panel: recruit and disband army, navy and air
@@ -8285,7 +8370,7 @@ function MilitaryController:Start()
 end
 
 return MilitaryController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000055"><Properties><string name="Name">NotificationController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000057"><Properties><string name="Name">NotificationController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/NotificationController.luau
 	Renders transient server notifications as stacked toasts in the top-right.
@@ -8359,6 +8444,14 @@ function NotificationController:Show(severity: string, title: string, body: stri
 	if not container then
 		return
 	end
+	local ClientPrefs = require(script.Parent.Parent.ClientPrefs)
+	if ClientPrefs.get("muteNotifications") then
+		return
+	end
+	pcall(function()
+		local sound = require(script.Parent.SoundController)
+		sound:PlaySfx(severity == "error" and "error" or (severity == "success" and "success" or "notify"))
+	end)
 	local toast = buildToast(severity, title, body)
 	toast.Position = UDim2.new(1, 20, 0, 0)
 	toast.Parent = container
@@ -8421,7 +8514,7 @@ function NotificationController:Start()
 end
 
 return NotificationController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000056"><Properties><string name="Name">ObjectivesController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000058"><Properties><string name="Name">ObjectivesController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/ObjectivesController.luau
 	The goals screen: every milestone with its reward and a done/to-do state,
@@ -8613,7 +8706,7 @@ function ObjectivesController:Start()
 end
 
 return ObjectivesController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000057"><Properties><string name="Name">PoliticsController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000059"><Properties><string name="Name">PoliticsController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/PoliticsController.luau
 	The governance panel: adjust the tax rate, switch government type, and
@@ -8894,7 +8987,7 @@ function PoliticsController:Start()
 end
 
 return PoliticsController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000058"><Properties><string name="Name">ResearchController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000060"><Properties><string name="Name">ResearchController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/ResearchController.luau
 	The technology panel. Lists every tech grouped by branch with a live status —
@@ -9139,7 +9232,293 @@ function ResearchController:Start()
 end
 
 return ResearchController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000059"><Properties><string name="Name">StateController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000061"><Properties><string name="Name">SettingsController</string><ProtectedString name="Source">--!strict
+--[[
+	Controllers/SettingsController.luau
+	The options menu. Drives ClientPrefs, which SoundController, AmbianceController
+	and NotificationController react to: music/SFX volume, mute notifications,
+	cinematic effects on/off, and a button to replay the tutorial.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Create = require(script.Parent.Parent.UI.Create)
+local Decor = require(script.Parent.Parent.UI.Decor)
+local Motion = require(script.Parent.Parent.UI.Motion)
+local Theme = require(script.Parent.Parent.UI.Theme)
+
+local ClientPrefs = require(script.Parent.Parent.ClientPrefs)
+
+local SettingsController = {
+	Name = "SettingsController",
+}
+
+SettingsController._panel = nil :: Frame?
+
+local function volumeRow(label: string, key: string, order: number): Frame
+	local valueLabel: TextLabel
+	local function refresh()
+		valueLabel.Text = ("%d%%"):format(math.floor(ClientPrefs.get(key) * 100 + 0.5))
+	end
+	local function step(delta: number)
+		ClientPrefs.set(key, math.clamp(ClientPrefs.get(key) + delta, 0, 1))
+		refresh()
+	end
+	local function mini(text: string, x: number, d: number): TextButton
+		return Create("TextButton", {
+			BackgroundColor3 = Theme.color.accentDim,
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = UDim2.new(1, x, 0.5, 0),
+			Size = UDim2.fromOffset(30, 28),
+			Font = Theme.font.bold,
+			Text = text,
+			TextColor3 = Theme.color.text,
+			TextSize = 18,
+			[Create.Children] = { Create("UICorner", { CornerRadius = UDim.new(0, 6) }) },
+			[Create.Event] = { Activated = function()
+				step(d)
+			end },
+		}) :: TextButton
+	end
+
+	valueLabel = Create("TextLabel", {
+		BackgroundTransparency = 1,
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -46, 0.5, 0),
+		Size = UDim2.fromOffset(50, 28),
+		Font = Theme.font.bold,
+		Text = "0%",
+		TextColor3 = Theme.color.text,
+		TextSize = 14,
+	}) :: TextLabel
+
+	local row = Create("Frame", {
+		LayoutOrder = order,
+		BackgroundColor3 = Theme.color.panelLight,
+		Size = UDim2.new(1, 0, 0, 42),
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+			Create("TextLabel", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(12, 0),
+				Size = UDim2.new(0.5, 0, 1, 0),
+				Font = Theme.font.medium,
+				Text = label,
+				TextColor3 = Theme.color.text,
+				TextSize = 13,
+				TextXAlignment = Enum.TextXAlignment.Left,
+			}),
+			mini("−", -84, -0.1),
+			valueLabel,
+			mini("+", -10, 0.1),
+		},
+	}) :: Frame
+	refresh()
+	return row
+end
+
+local function toggleRow(label: string, key: string, order: number): Frame
+	local btn: TextButton
+	local function refresh()
+		local on = ClientPrefs.get(key) == true
+		btn.Text = on and "ON" or "OFF"
+		btn.BackgroundColor3 = on and Theme.color.good or Theme.color.panelLight
+		btn.TextColor3 = on and Theme.color.bg or Theme.color.textDim
+	end
+	btn = Create("TextButton", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -10, 0.5, 0),
+		Size = UDim2.fromOffset(64, 28),
+		Font = Theme.font.bold,
+		Text = "OFF",
+		TextSize = 13,
+		BackgroundColor3 = Theme.color.panelLight,
+		TextColor3 = Theme.color.textDim,
+		[Create.Children] = { Create("UICorner", { CornerRadius = UDim.new(0, 6) }) },
+		[Create.Event] = { Activated = function()
+			ClientPrefs.set(key, not (ClientPrefs.get(key) == true))
+			refresh()
+		end },
+	}) :: TextButton
+
+	local row = Create("Frame", {
+		LayoutOrder = order,
+		BackgroundColor3 = Theme.color.panelLight,
+		Size = UDim2.new(1, 0, 0, 42),
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+			Create("TextLabel", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(12, 0),
+				Size = UDim2.new(0.7, 0, 1, 0),
+				Font = Theme.font.medium,
+				Text = label,
+				TextColor3 = Theme.color.text,
+				TextSize = 13,
+				TextXAlignment = Enum.TextXAlignment.Left,
+			}),
+			btn,
+		},
+	}) :: Frame
+	refresh()
+	return row
+end
+
+function SettingsController:_build()
+	local HudController = require(script.Parent.HudController)
+	local gui = HudController:GetGui()
+
+	local content = Create("Frame", {
+		Position = UDim2.fromOffset(12, 44),
+		Size = UDim2.new(1, -24, 0, 240),
+		BackgroundTransparency = 1,
+		[Create.Children] = {
+			Create("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }),
+		},
+	})
+	volumeRow("Music volume", "musicVolume", 1).Parent = content
+	volumeRow("Sound effects", "sfxVolume", 2).Parent = content
+	toggleRow("Mute notifications", "muteNotifications", 3).Parent = content
+	toggleRow("Cinematic effects", "effectsEnabled", 4).Parent = content
+
+	Create("TextButton", {
+		LayoutOrder = 5,
+		BackgroundColor3 = Theme.color.accentDim,
+		Size = UDim2.new(1, 0, 0, 40),
+		Font = Theme.font.bold,
+		Text = "↺ Replay tutorial",
+		TextColor3 = Theme.color.text,
+		TextSize = 14,
+		[Create.Children] = { Create("UICorner", { CornerRadius = UDim.new(0, 8) }) },
+		[Create.Event] = { Activated = function()
+			local Tutorial = require(script.Parent.TutorialController)
+			Tutorial:Restart()
+		end },
+	}).Parent = content
+
+	local panel = Create("Frame", {
+		Name = "SettingsPanel",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(340, 336),
+		BackgroundColor3 = Theme.color.panel,
+		Visible = false,
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = Theme.corner }),
+			Create("UIStroke", { Color = Theme.color.stroke, Thickness = 1 }),
+			Create("TextLabel", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(14, 10),
+				Size = UDim2.new(1, -28, 0, 22),
+				Font = Theme.font.bold,
+				Text = "⚙ Settings",
+				TextColor3 = Theme.color.text,
+				TextSize = 17,
+				TextXAlignment = Enum.TextXAlignment.Left,
+			}),
+			content,
+		},
+	}) :: Frame
+	Decor.gradient(panel, Theme.gradient.panel)
+	panel.Parent = gui
+	self._panel = panel
+end
+
+function SettingsController:Start()
+	local HudController = require(script.Parent.HudController)
+	self:_build()
+	HudController:AddButton("⚙ Settings", function()
+		if self._panel then
+			Motion.toggle(self._panel)
+		end
+	end)
+end
+
+return SettingsController
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000062"><Properties><string name="Name">SoundController</string><ProtectedString name="Source">--!strict
+--[[
+	Controllers/SoundController.luau
+	Audio plumbing with music/SFX volume buses. Reads sound ids from Config/Audio
+	(blank by default, so it's silent until you paste asset ids) and volumes from
+	ClientPrefs. Other controllers call PlaySfx / PlayClick; playing a sound with
+	no id configured is a safe no-op.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local SoundService = game:GetService("SoundService")
+
+local Audio = require(ReplicatedStorage.Nexus.Config.Audio)
+
+local ClientPrefs = require(script.Parent.Parent.ClientPrefs)
+
+local SoundController = {
+	Name = "SoundController",
+}
+
+SoundController._sfx = {} :: { [string]: Sound }
+SoundController._music = nil :: Sound?
+SoundController._musicGroup = nil :: SoundGroup?
+SoundController._sfxGroup = nil :: SoundGroup?
+
+local function makeGroup(name: string, volume: number): SoundGroup
+	local group = Instance.new("SoundGroup")
+	group.Name = name
+	group.Volume = volume
+	group.Parent = SoundService
+	return group
+end
+
+function SoundController:Init()
+	self._musicGroup = makeGroup("NexusMusic", ClientPrefs.get("musicVolume"))
+	self._sfxGroup = makeGroup("NexusSFX", ClientPrefs.get("sfxVolume"))
+
+	for name, id in Audio.sfx do
+		local sound = Instance.new("Sound")
+		sound.Name = name
+		sound.SoundId = id
+		sound.SoundGroup = self._sfxGroup
+		sound.Parent = SoundService
+		self._sfx[name] = sound
+	end
+
+	if Audio.music ~= "" then
+		local music = Instance.new("Sound")
+		music.Name = "NexusTrack"
+		music.SoundId = Audio.music
+		music.Looped = true
+		music.SoundGroup = self._musicGroup
+		music.Parent = SoundService
+		self._music = music
+	end
+
+	ClientPrefs.Changed:Connect(function(key, value)
+		if key == "musicVolume" and self._musicGroup then
+			self._musicGroup.Volume = value
+		elseif key == "sfxVolume" and self._sfxGroup then
+			self._sfxGroup.Volume = value
+		end
+	end)
+end
+
+function SoundController:PlaySfx(name: string)
+	local sound = self._sfx[name]
+	if sound and sound.SoundId ~= "" then
+		sound:Play()
+	end
+end
+
+function SoundController:PlayClick()
+	self:PlaySfx("click")
+end
+
+function SoundController:Start()
+	if self._music then
+		self._music:Play()
+	end
+end
+
+return SoundController
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000063"><Properties><string name="Name">StateController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/StateController.luau
 	The client's single source of truth for replicated nation state. It listens
@@ -9199,7 +9578,7 @@ function StateController:Init()
 end
 
 return StateController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000060"><Properties><string name="Name">TerritoryController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000064"><Properties><string name="Name">TerritoryController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/TerritoryController.luau
 	The world map: a grid of claimable regions laid out from the Regions config
@@ -9430,7 +9809,212 @@ function TerritoryController:Start()
 end
 
 return TerritoryController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000061"><Properties><string name="Name">WorldController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000065"><Properties><string name="Name">TutorialController</string><ProtectedString name="Source">--!strict
+--[[
+	Controllers/TutorialController.luau
+	A guided first-session card. It shows one step at a time and auto-advances
+	when the game state satisfies that step (e.g. a Coal Plant now exists), with
+	Next/Skip for steps that aren't state-detectable. Shown once for new players
+	(persisted via the tutorialDone flag) and replayable from Settings.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Net = require(ReplicatedStorage.Nexus.Net)
+local NetRoutes = require(ReplicatedStorage.Nexus.NetRoutes)
+local ServerSettings = require(ReplicatedStorage.Nexus.Config.ServerSettings)
+
+local Create = require(script.Parent.Parent.UI.Create)
+local Decor = require(script.Parent.Parent.UI.Decor)
+local Theme = require(script.Parent.Parent.UI.Theme)
+
+local TutorialController = {
+	Name = "TutorialController",
+}
+
+TutorialController._card = nil :: Frame?
+TutorialController._text = nil :: TextLabel?
+TutorialController._counter = nil :: TextLabel?
+TutorialController._step = 1
+TutorialController._active = false
+TutorialController._started = false
+
+local function hasBuilding(nation: any, kind: string): boolean
+	for _, b in nation.buildings do
+		if b.kind == kind then
+			return true
+		end
+	end
+	return false
+end
+
+-- `check` returns true when the step is satisfied by game state (nil = manual).
+local STEPS: { { text: string, check: ((any) -&gt; boolean)? } } = {
+	{ text = "Welcome to Nexus! Open 🏗 Build and place a Coal Power Plant to power your city.", check = function(n)
+		return hasBuilding(n, "coal_plant")
+	end },
+	{ text = "Now place a Farm to feed your growing population.", check = function(n)
+		return hasBuilding(n, "farm")
+	end },
+	{ text = "Add a Housing Block so more citizens can move in.", check = function(n)
+		return hasBuilding(n, "house")
+	end },
+	{ text = "Open 🔬 Research and start your first technology.", check = function(n)
+		if n.research.current then
+			return true
+		end
+		for _, u in n.research.unlocked do
+			if u then
+				return true
+			end
+		end
+		return false
+	end },
+	{ text = "Open 🎯 Goals to see objectives that reward you as you grow.", check = nil },
+	{ text = "You're ready! Trade in 💱 Market, expand in 🗺 Territory, and climb 🏆 Ranks. Good luck, leader!", check = nil },
+}
+
+function TutorialController:_build()
+	local HudController = require(script.Parent.HudController)
+	local gui = HudController:GetGui()
+
+	local text = Create("TextLabel", {
+		Name = "Text",
+		BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(14, 8),
+		Size = UDim2.new(1, -28, 0, 44),
+		Font = Theme.font.medium,
+		Text = "",
+		TextColor3 = Theme.color.text,
+		TextSize = 14,
+		TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+	}) :: TextLabel
+
+	local counter = Create("TextLabel", {
+		Name = "Counter",
+		BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(14, 56),
+		Size = UDim2.fromOffset(80, 22),
+		Font = Theme.font.bold,
+		Text = "Step 1/6",
+		TextColor3 = Theme.color.accent,
+		TextSize = 12,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}) :: TextLabel
+
+	local function actionBtn(label: string, x: number, color: Color3, onClick: () -&gt; ()): TextButton
+		return Create("TextButton", {
+			AnchorPoint = Vector2.new(1, 1),
+			Position = UDim2.new(1, x, 1, -8),
+			Size = UDim2.fromOffset(84, 28),
+			BackgroundColor3 = color,
+			Font = Theme.font.bold,
+			Text = label,
+			TextColor3 = Theme.color.text,
+			TextSize = 13,
+			[Create.Children] = { Create("UICorner", { CornerRadius = UDim.new(0, 6) }) },
+			[Create.Event] = { Activated = onClick },
+		}) :: TextButton
+	end
+
+	local card = Create("Frame", {
+		Name = "TutorialCard",
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -128),
+		Size = UDim2.fromOffset(440, 92),
+		BackgroundColor3 = Theme.color.panel,
+		Visible = false,
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = Theme.corner }),
+			Create("UIStroke", { Color = Theme.color.accent, Thickness = 1.5, Transparency = 0.2 }),
+			text,
+			counter,
+			actionBtn("Next →", -10, Theme.color.accentDim, function()
+				self:_advance()
+			end),
+			actionBtn("Skip", -102, Color3.fromRGB(70, 74, 90), function()
+				self:_finish()
+			end),
+		},
+	}) :: Frame
+	Decor.gradient(card, Theme.gradient.panel)
+	card.Parent = gui
+
+	self._card = card
+	self._text = text
+	self._counter = counter
+end
+
+function TutorialController:_render()
+	local step = STEPS[self._step]
+	if self._text then
+		self._text.Text = step.text
+	end
+	if self._counter then
+		self._counter.Text = ("Step %d/%d"):format(self._step, #STEPS)
+	end
+end
+
+function TutorialController:_show()
+	self._active = true
+	self:_render()
+	if self._card then
+		self._card.Visible = true
+	end
+end
+
+function TutorialController:_advance()
+	if self._step &gt;= #STEPS then
+		self:_finish()
+		return
+	end
+	self._step += 1
+	self:_render()
+end
+
+function TutorialController:_finish()
+	self._active = false
+	if self._card then
+		self._card.Visible = false
+	end
+	task.spawn(function()
+		Net.request(NetRoutes.TUTORIAL_DONE)
+	end)
+end
+
+--- Replay from the beginning (used by the Settings panel).
+function TutorialController:Restart()
+	self._step = 1
+	self:_show()
+end
+
+function TutorialController:Start()
+	local StateController = require(script.Parent.StateController)
+	self:_build()
+
+	StateController.Changed:Connect(function(snapshot)
+		local nation = snapshot.nation
+		-- Auto-start once for a new nation.
+		if not self._started then
+			self._started = true
+			if ServerSettings.showStartingHints and not nation.flags.tutorialDone then
+				self:_show()
+			end
+		end
+		-- Auto-advance when the current step's condition is met.
+		if self._active then
+			local step = STEPS[self._step]
+			if step.check and step.check(nation) then
+				self:_advance()
+			end
+		end
+	end)
+end
+
+return TutorialController
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000066"><Properties><string name="Name">WorldController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/WorldController.luau
 	Builds the 3D city view: a stylized ground with a glowing district grid,
@@ -10055,7 +10639,7 @@ function WorldController:Start()
 end
 
 return WorldController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000062"><Properties><string name="Name">WorldStateController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000067"><Properties><string name="Name">WorldStateController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/WorldStateController.luau
 	Client store for world-scope data that isn't part of the player's own nation:
@@ -10117,7 +10701,7 @@ function WorldStateController:Init()
 end
 
 return WorldStateController
-</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000071"><Properties><string name="Name">UI</string></Properties><Item class="Folder" referent="RBX00000064"><Properties><string name="Name">Components</string></Properties></Item><Item class="ModuleScript" referent="RBX00000065"><Properties><string name="Name">Create</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000076"><Properties><string name="Name">UI</string></Properties><Item class="Folder" referent="RBX00000069"><Properties><string name="Name">Components</string></Properties></Item><Item class="ModuleScript" referent="RBX00000070"><Properties><string name="Name">Create</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Create.luau
 	A tiny declarative helper for building Instance trees without the noise of
@@ -10177,7 +10761,7 @@ local callable = setmetatable(Create, {
 
 -- The `any` cast lets callers use both `Create("Frame")` and `Create.Children`.
 return (callable :: any) :: (((className: string, props: { [any]: any }?) -&gt; Instance) &amp; typeof(Create))
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000066"><Properties><string name="Name">Decor</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000071"><Properties><string name="Name">Decor</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Decor.luau
 	Small cosmetic helpers so every panel, chip and button gets the same finish
@@ -10245,7 +10829,7 @@ function Decor.shadow(frame: GuiObject): Frame
 end
 
 return Decor
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000067"><Properties><string name="Name">Format</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000072"><Properties><string name="Name">Format</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Format.luau
 	Number/text formatting shared by every panel, so "12.3k" and "+4.5%" look the
@@ -10283,7 +10867,7 @@ function Format.round(n: number): string
 end
 
 return Format
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000068"><Properties><string name="Name">Graph</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000073"><Properties><string name="Name">Graph</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Graph.luau
 	A tiny, asset-free bar graph. Given a container size it returns the frame plus
@@ -10364,7 +10948,7 @@ function Graph.new(size: UDim2): (Frame, (values: { number }, color: Color3?) -&
 end
 
 return Graph
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000069"><Properties><string name="Name">Motion</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000074"><Properties><string name="Name">Motion</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Motion.luau
 	Tiny animation helpers so panels don't just snap on/off. Uses a UIScale child
@@ -10412,7 +10996,7 @@ function Motion.toggle(frame: GuiObject)
 end
 
 return Motion
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000070"><Properties><string name="Name">Theme</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000075"><Properties><string name="Name">Theme</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Theme.luau
 	Design tokens for the whole interface. One place to restyle the game. Tuned
@@ -10464,5 +11048,5 @@ Theme.corner = UDim.new(0, 12)
 Theme.pad = 10
 
 return Theme
-</ProtectedString></Properties></Item></Item></Item></Item></Item><Item class="Workspace" referent="RBX00000077"><Properties><bool name="StreamingEnabled">true</bool></Properties></Item><Item class="Players" referent="RBX00000078"><Properties><bool name="CharacterAutoLoads">false</bool></Properties></Item>
+</ProtectedString></Properties></Item></Item></Item></Item></Item><Item class="Workspace" referent="RBX00000082"><Properties><bool name="StreamingEnabled">true</bool></Properties></Item><Item class="Players" referent="RBX00000083"><Properties><bool name="CharacterAutoLoads">false</bool></Properties></Item>
 </roblox>
