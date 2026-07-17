@@ -12,6 +12,9 @@
 ]]
 
 local Lighting = game:GetService("Lighting")
+local RunService = game:GetService("RunService")
+
+local DAY_LENGTH = 600 -- real seconds for a full 24-hour cycle
 
 local AmbianceController = {
 	Name = "AmbianceController",
@@ -94,6 +97,13 @@ function AmbianceController:Start()
 	ClientPrefs.Changed:Connect(function(key, value)
 		if key == "effectsEnabled" then
 			self:SetEffectsEnabled(value)
+		end
+	end)
+
+	-- Living sky: advance the time of day. Neon building accents glow at night.
+	RunService.Heartbeat:Connect(function(dt)
+		if ClientPrefs.get("dayNight") then
+			Lighting.ClockTime = (Lighting.ClockTime + dt * (24 / DAY_LENGTH)) % 24
 		end
 	end)
 end

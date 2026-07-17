@@ -130,7 +130,7 @@ def main() -> None:
         service("ReplicatedStorage", "", shared)
         + service("ServerScriptService", "", server)
         + service("StarterPlayer", "", container("StarterPlayerScripts", "StarterPlayerScripts", client))
-        + service("Workspace", '<bool name="StreamingEnabled">true</bool>')
+        + service("Workspace", '<bool name="StreamingEnabled">false</bool>')
         + service("Players", '<bool name="CharacterAutoLoads">false</bool>')
     )
 

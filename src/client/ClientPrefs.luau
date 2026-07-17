@@ -21,6 +21,7 @@ local state: { [string]: any } = {
 	sfxVolume = Audio.volumes.sfx,
 	muteNotifications = false,
 	effectsEnabled = true,
+	dayNight = true,
 }
 
 function ClientPrefs.get(key: string): any

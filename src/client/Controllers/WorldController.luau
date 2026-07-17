@@ -103,15 +103,50 @@ local function makeAnchored(name: string): Part
 	return p
 end
 
+-- Shortest distance from point p to segment a-b, all on the XZ plane.
+local function pointSegDist(p: Vector3, a: Vector3, b: Vector3): number
+	local ab = b - a
+	local len2 = ab:Dot(ab)
+	local t = len2 > 0 and math.clamp((p - a):Dot(ab) / len2, 0, 1) or 0
+	return (p - (a + ab * t)).Magnitude
+end
+
+-- A simple low-poly tree from primitives (no external assets).
+local function makeTree(pos: Vector3, parent: Instance)
+	local scale = 0.8 + math.random() * 0.7
+	local trunk = makeAnchored("Trunk")
+	trunk.Size = Vector3.new(1.6 * scale, 7 * scale, 1.6 * scale)
+	trunk.Position = pos + Vector3.new(0, 3.5 * scale, 0)
+	trunk.Color = Color3.fromRGB(96, 66, 44)
+	trunk.Material = Enum.Material.Wood
+	trunk.CanQuery = false
+	trunk.Parent = parent
+
+	local canopy = makeAnchored("Canopy")
+	canopy.Shape = Enum.PartType.Ball
+	canopy.Size = Vector3.new(9 * scale, 9 * scale, 9 * scale)
+	canopy.Position = pos + Vector3.new(0, 9 * scale, 0)
+	canopy.Color = Color3.fromRGB(70 + math.random(0, 40), 120 + math.random(0, 50), 60)
+	canopy.Material = Enum.Material.Grass
+	canopy.CanQuery = false
+	canopy.Parent = parent
+end
+
+local function makeRock(pos: Vector3, parent: Instance)
+	local rock = makeAnchored("Rock")
+	rock.Shape = Enum.PartType.Ball
+	local s = 4 + math.random() * 7
+	rock.Size = Vector3.new(s, s * 0.6, s)
+	rock.Position = pos + Vector3.new(0, s * 0.2, 0)
+	rock.Orientation = Vector3.new(math.random(-20, 20), math.random(0, 360), math.random(-20, 20))
+	rock.Color = Color3.fromRGB(110, 112, 118)
+	rock.Material = Enum.Material.Rock
+	rock.CanQuery = false
+	rock.Parent = parent
+end
+
 function WorldController:_buildWorld()
-	-- Surrounding water for context and reflection (spans out under the regions).
-	local ocean = makeAnchored("NexusOcean")
-	ocean.Size = Vector3.new(WorldGrid.SPAN * 9, 4, WorldGrid.SPAN * 9)
-	ocean.Position = Vector3.new(0, -3.2, 0)
-	ocean.Material = Enum.Material.Water
-	ocean.Color = Color3.fromRGB(30, 58, 92)
-	ocean.Transparency = 0.1
-	ocean.Parent = Workspace
+	-- Water is real Terrain now (see _buildTerrain), so no ocean part here.
 
 	-- The buildable land plate.
 	local base = makeAnchored("NexusGround")
@@ -257,6 +292,128 @@ function WorldController:_buildRegionZones()
 
 		self._regionPads[regionId] = { pad = pad, box = box, owner = ownerLabel }
 	end
+end
+
+-- Generate a real terrain continent: ocean, land, region flats, hills, a rough
+-- coastline, roads to each region, and scattered trees/rocks. All client-side.
+function WorldController:_buildTerrain()
+	local Terrain = Workspace.Terrain
+	pcall(function()
+		Terrain:Clear()
+	end)
+
+	local LAND_HX, LAND_HZ = 1520, 1160
+
+	-- Ocean (surface at y = -2) then the continent slab (top at y = -1).
+	Terrain:FillBlock(CFrame.new(0, -12, 0), Vector3.new(LAND_HX * 2 + 900, 20, LAND_HZ * 2 + 900), Enum.Material.Water)
+	Terrain:FillBlock(CFrame.new(0, -5, 0), Vector3.new(LAND_HX * 2, 8, LAND_HZ * 2), Enum.Material.Grass)
+
+	-- Flatten the land beneath each region, and remember the centres + roads.
+	local centers = {}
+	for _, def in Regions do
+		local c = regionWorldPos(def)
+		table.insert(centers, c)
+		Terrain:FillBlock(CFrame.new(c.X, -4, c.Z), Vector3.new(320, 8, 320), Enum.Material.Grass)
+	end
+
+	local roads = {}
+	for _, c in centers do
+		local dir = Vector3.new(c.X, 0, c.Z)
+		if dir.Magnitude > 1 then
+			table.insert(roads, { a = dir.Unit * 300, b = c })
+		end
+	end
+	local function roadDist(x: number, z: number): number
+		local p = Vector3.new(x, 0, z)
+		local best = math.huge
+		for _, seg in roads do
+			best = math.min(best, pointSegDist(p, seg.a, seg.b))
+		end
+		return best
+	end
+	local function nearRegion(x: number, z: number, pad: number): boolean
+		for _, c in centers do
+			if (Vector3.new(x, 0, z) - Vector3.new(c.X, 0, c.Z)).Magnitude < pad then
+				return true
+			end
+		end
+		return false
+	end
+	local function nearCity(x: number, z: number): boolean
+		return (x * x + z * z) < 340 * 340
+	end
+
+	-- Rolling hills that avoid the city, regions and roads.
+	for _ = 1, 48 do
+		local x = math.random(-LAND_HX + 120, LAND_HX - 120)
+		local z = math.random(-LAND_HZ + 120, LAND_HZ - 120)
+		if not nearCity(x, z) and not nearRegion(x, z, 210) and roadDist(x, z) > 44 then
+			local mat = math.random() < 0.22 and Enum.Material.Rock or Enum.Material.Grass
+			Terrain:FillBall(Vector3.new(x, math.random(2, 12), z), math.random(28, 66), mat)
+		end
+	end
+
+	-- Rough up the coastline with a few bays (water) and peninsulas (land).
+	for _ = 1, 14 do
+		local onX = math.random() < 0.5
+		local x = onX and (math.random() < 0.5 and -LAND_HX or LAND_HX) or math.random(-LAND_HX, LAND_HX)
+		local z = onX and math.random(-LAND_HZ, LAND_HZ) or (math.random() < 0.5 and -LAND_HZ or LAND_HZ)
+		local water = math.random() < 0.5
+		Terrain:FillBall(Vector3.new(x, water and -3 or -4, z), math.random(70, 150), water and Enum.Material.Water or Enum.Material.Grass)
+	end
+
+	self:_buildRoads(roads)
+	self:_buildScenery(roadDist, nearCity, nearRegion)
+end
+
+function WorldController:_buildRoads(roads: { any })
+	local folder = Instance.new("Folder")
+	folder.Name = "NexusRoads"
+	folder.Parent = Workspace
+	for _, seg in roads do
+		local mid = (seg.a + seg.b) / 2
+		local length = (seg.b - seg.a).Magnitude
+		local road = makeAnchored("Road")
+		road.Size = Vector3.new(16, 0.6, length)
+		road.CFrame = CFrame.lookAt(mid + Vector3.new(0, 0.2, 0), Vector3.new(seg.b.X, 0.2, seg.b.Z))
+		road.Color = Color3.fromRGB(48, 48, 54)
+		road.Material = Enum.Material.Asphalt
+		road.CanQuery = false
+		road.Parent = folder
+	end
+end
+
+function WorldController:_buildScenery(roadDist, nearCity, nearRegion)
+	local folder = Instance.new("Folder")
+	folder.Name = "NexusScenery"
+	folder.Parent = Workspace
+
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Include
+	params.FilterDescendantsInstances = { Workspace.Terrain }
+
+	-- Drop props onto the terrain surface via a downward raycast, skipping the
+	-- city, regions, roads and anything underwater.
+	local function scatter(count: number, place: (Vector3, Instance) -> ())
+		local placed = 0
+		local attempts = 0
+		while placed < count and attempts < count * 4 do
+			attempts += 1
+			local x = math.random(-1450, 1450)
+			local z = math.random(-1100, 1100)
+			if nearCity(x, z) or nearRegion(x, z, 170) or roadDist(x, z) < 22 then
+				continue
+			end
+			local hit = Workspace:Raycast(Vector3.new(x, 300, z), Vector3.new(0, -600, 0), params)
+			if hit and hit.Material ~= Enum.Material.Water and hit.Position.Y > -1.4 then
+				place(hit.Position, folder)
+				placed += 1
+			end
+		end
+	end
+
+	scatter(150, makeTree)
+	scatter(46, makeRock)
 end
 
 -- ---- Camera ---------------------------------------------------------------
@@ -603,6 +760,15 @@ end
 function WorldController:Init()
 	self:_buildWorld()
 	self:_setupCamera()
+	-- Terrain is heavier, so generate it just after the city is up.
+	task.spawn(function()
+		local ok, err = pcall(function()
+			self:_buildTerrain()
+		end)
+		if not ok then
+			warn("[Nexus] terrain generation failed: " .. tostring(err))
+		end
+	end)
 end
 
 function WorldController:Start()

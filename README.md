@@ -31,7 +31,7 @@ system, all real, non-placeholder Luau that runs and interacts today.
 | **Objectives** | ✅ | 12 milestone goals evaluated server-side with one-time rewards; persisted, never paid twice |
 | **Leaderboard** | ✅ | Live global power ranking of every nation (players + AI) |
 | **Client UI** | ✅ | HUD plus panels for build, politics, research, economy, diplomacy, territory, military, market, goals, ranks & settings |
-| **3D world & camera** | ✅ | Cinematic lighting/atmosphere, stylized neon city, physical region zones, GTA-style fly-to, RTS camera |
+| **3D world & camera** | ✅ | Procedural terrain continent (hills, coastline, Terrain water), roads, trees & rocks, day/night cycle, a buildable neon city, physical region zones, GTA-style fly-to, RTS camera |
 | **Cross-platform** | ✅ | Mouse, touch (reticle + Place button, pinch-zoom) and gamepad (stick pan/zoom, A/B/R1) controls |
 | **Onboarding & settings** | ✅ | Interactive step-by-step tutorial (persisted flag, replayable) and an options menu (volume, mute, effects) |
 | **Audio scaffold** | ✅ | Music/SFX buses wired to clicks & notifications; paste asset ids into `Config/Audio` to enable |

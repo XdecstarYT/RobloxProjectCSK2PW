@@ -136,7 +136,7 @@ function SettingsController:_build()
 
 	local content = Create("Frame", {
 		Position = UDim2.fromOffset(12, 44),
-		Size = UDim2.new(1, -24, 0, 240),
+		Size = UDim2.new(1, -24, 0, 300),
 		BackgroundTransparency = 1,
 		[Create.Children] = {
 			Create("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }),
@@ -146,9 +146,10 @@ function SettingsController:_build()
 	volumeRow("Sound effects", "sfxVolume", 2).Parent = content
 	toggleRow("Mute notifications", "muteNotifications", 3).Parent = content
 	toggleRow("Cinematic effects", "effectsEnabled", 4).Parent = content
+	toggleRow("Day / night cycle", "dayNight", 5).Parent = content
 
 	Create("TextButton", {
-		LayoutOrder = 5,
+		LayoutOrder = 6,
 		BackgroundColor3 = Theme.color.accentDim,
 		Size = UDim2.new(1, 0, 0, 40),
 		Font = Theme.font.bold,
@@ -166,7 +167,7 @@ function SettingsController:_build()
 		Name = "SettingsPanel",
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromOffset(340, 336),
+		Size = UDim2.fromOffset(340, 392),
 		BackgroundColor3 = Theme.color.panel,
 		Visible = false,
 		[Create.Children] = {
