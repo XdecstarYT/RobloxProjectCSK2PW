@@ -10227,6 +10227,7 @@ local Players = game:GetService("Players")
 local Buildings = require(ReplicatedStorage.Nexus.Config.Buildings)
 local Regions = require(ReplicatedStorage.Nexus.Config.Regions)
 local Resources = require(ReplicatedStorage.Nexus.Config.Resources)
+local ServerSettings = require(ReplicatedStorage.Nexus.Config.ServerSettings)
 local WorldGrid = require(ReplicatedStorage.Nexus.WorldGrid)
 
 local Theme = require(script.Parent.Parent.UI.Theme)
@@ -10259,6 +10260,14 @@ WorldController._cityFolder = nil :: Folder?
 WorldController._baseplate = nil :: BasePart?
 WorldController._regionPads = {} :: { [string]: any }
 WorldController._holoMarkers = {} :: { [string]: any }
+WorldController._cars = {} :: { any }
+WorldController._citizens = {} :: { any }
+WorldController._unitModels = {} :: { Model }
+WorldController._unitSig = ""
+WorldController._militaryFolder = nil :: Folder?
+WorldController._globeModel = nil :: Model?
+WorldController._globeCenter = Vector3.zero
+WorldController._globeAngle = 0
 
 -- Camera state.
 WorldController._focus = Vector3.new(0, 0, 0)
@@ -10362,6 +10371,78 @@ local function makeRock(pos: Vector3, parent: Instance)
 	rock.Parent = parent
 end
 
+-- A small anchored block used to assemble the primitive vehicle/unit models.
+local function block(size: Vector3, offset: Vector3, color: Color3, material: Enum.Material?): Part
+	local p = makeAnchored("Part")
+	p.Size = size
+	p.Position = offset
+	p.Color = color
+	p.Material = material or Enum.Material.SmoothPlastic
+	p.CanQuery = false
+	return p
+end
+
+local function assemble(name: string, parts: { Part }): Model
+	local m = Instance.new("Model")
+	m.Name = name
+	for i, p in parts do
+		p.Parent = m
+		if i == 1 then
+			m.PrimaryPart = p
+		end
+	end
+	return m
+end
+
+local function makeCar(): Model
+	-- Long axis is Z so CFrame.lookAt (which faces -Z) points the car forward.
+	local hue = Color3.fromHSV(math.random(), 0.55, 0.9)
+	return assemble("Car", {
+		block(Vector3.new(3, 1.6, 6), Vector3.new(0, 1, 0), hue, Enum.Material.SmoothPlastic),
+		block(Vector3.new(2.6, 1.2, 3), Vector3.new(0, 2.1, -0.3), Color3.fromRGB(40, 44, 54), Enum.Material.Glass),
+	})
+end
+
+local function makeCitizen(): Model
+	local shirt = Color3.fromHSV(math.random(), 0.5, 0.85)
+	return assemble("Citizen", {
+		block(Vector3.new(1.1, 2.2, 1.1), Vector3.new(0, 1.1, 0), shirt),
+		block(Vector3.new(1.2, 1.2, 1.2), Vector3.new(0, 2.6, 0), Color3.fromRGB(224, 190, 160)),
+	})
+end
+
+local function makeTank(): Model
+	local green = Color3.fromRGB(78, 92, 60)
+	return assemble("Tank", {
+		block(Vector3.new(7, 2, 4), Vector3.new(0, 1.2, 0), green, Enum.Material.Metal),
+		block(Vector3.new(3.6, 1.4, 3), Vector3.new(0, 2.7, 0), Color3.fromRGB(64, 76, 50), Enum.Material.Metal),
+		block(Vector3.new(4, 0.5, 0.5), Vector3.new(2.8, 2.7, 0), Color3.fromRGB(40, 44, 40), Enum.Material.Metal),
+	})
+end
+
+local function makePlane(): Model
+	local grey = Color3.fromRGB(150, 156, 166)
+	return assemble("Plane", {
+		block(Vector3.new(9, 1.4, 1.4), Vector3.new(0, 1, 0), grey, Enum.Material.Metal),
+		block(Vector3.new(2.4, 0.3, 9), Vector3.new(0.5, 1, 0), grey, Enum.Material.Metal),
+		block(Vector3.new(2, 1.6, 0.3), Vector3.new(-4, 1.7, 0), grey, Enum.Material.Metal),
+	})
+end
+
+local function makeShip(): Model
+	local hull = Color3.fromRGB(70, 78, 90)
+	return assemble("Ship", {
+		block(Vector3.new(12, 2.4, 4), Vector3.new(0, 1.4, 0), hull, Enum.Material.Metal),
+		block(Vector3.new(2.6, 3, 2.6), Vector3.new(-1, 3.4, 0), Color3.fromRGB(150, 156, 166), Enum.Material.Metal),
+	})
+end
+
+-- A random walkable point on the city plate (for wandering citizens).
+local function randomPlatePos(): Vector3
+	local lim = WorldGrid.SPAN / 2 - 24
+	return Vector3.new(math.random(-lim, lim), 1.1, math.random(-lim, lim))
+end
+
 function WorldController:_buildWorld()
 	-- Water is real Terrain now (see _buildTerrain), so no ocean part here.
 
@@ -10426,6 +10507,10 @@ function WorldController:_buildWorld()
 	self:_buildRegionZones()
 	self:_buildLampPosts()
 	self:_buildHologramMap()
+	if ServerSettings.militaryEnabled then
+		self:_buildMilitaryBase()
+	end
+	self:_buildCitizens()
 end
 
 -- Glowing lamp posts around the city edge (they pop at night with bloom).
@@ -10456,34 +10541,29 @@ function WorldController:_buildLampPosts()
 	end
 end
 
--- A literal, physical strategy map: a war table near the capital with a floating
--- pillar per region, coloured live by ownership. This is the in-world map.
+-- A literal, physical strategy map: a war table near the capital topped by a
+-- slowly rotating holographic globe, with a floating marker per region coloured
+-- live by ownership. This is the in-world map object.
 function WorldController:_buildHologramMap()
 	local origin = Vector3.new(0, 0, -360) -- just outside the buildable plate
+	local center = origin + Vector3.new(0, 26, 0)
+	self._globeCenter = center
 	local folder = Instance.new("Folder")
 	folder.Name = "NexusWarMap"
 	folder.Parent = Workspace
 
 	local base = makeAnchored("MapTable")
-	base.Size = Vector3.new(64, 6, 46)
-	base.Position = origin + Vector3.new(0, 3, 0)
+	base.Size = Vector3.new(30, 10, 30)
+	base.Shape = Enum.PartType.Cylinder
+	base.CFrame = CFrame.new(origin + Vector3.new(0, 5, 0)) * CFrame.Angles(0, 0, math.rad(90))
 	base.Color = Color3.fromRGB(30, 34, 46)
 	base.Material = Enum.Material.Metal
 	base.CanQuery = false
 	base.Parent = folder
 
-	local slab = makeAnchored("HoloSurface")
-	slab.Size = Vector3.new(60, 0.4, 42)
-	slab.Position = origin + Vector3.new(0, 6.4, 0)
-	slab.Color = Color3.fromRGB(70, 130, 220)
-	slab.Material = Enum.Material.Neon
-	slab.Transparency = 0.55
-	slab.CanQuery = false
-	slab.Parent = folder
-
 	local title = Instance.new("BillboardGui")
-	title.Size = UDim2.fromOffset(180, 40)
-	title.StudsOffsetWorldSpace = Vector3.new(0, 12, 0)
+	title.Size = UDim2.fromOffset(200, 40)
+	title.StudsOffsetWorldSpace = Vector3.new(0, 42, 0)
 	title.AlwaysOnTop = true
 	title.Adornee = base
 	title.Parent = base
@@ -10491,34 +10571,218 @@ function WorldController:_buildHologramMap()
 	titleLabel.Size = UDim2.fromScale(1, 1)
 	titleLabel.BackgroundTransparency = 1
 	titleLabel.Font = Theme.font.black
-	titleLabel.Text = "🗺 WAR MAP"
+	titleLabel.Text = "🌐 WORLD MAP"
 	titleLabel.TextColor3 = Theme.color.accent
 	titleLabel.TextScaled = true
 	titleLabel.Parent = title
 
-	-- Scale region world positions onto the table surface.
-	local scale = 24 / REGION_SPACING
+	-- Rotating globe (its own Model so it can spin without the table).
+	local globeModel = Instance.new("Model")
+	globeModel.Name = "Globe"
+	globeModel.Parent = folder
+
+	local RADIUS = 15
+	local sphere = makeAnchored("Sphere")
+	sphere.Shape = Enum.PartType.Ball
+	sphere.Size = Vector3.new(RADIUS * 2, RADIUS * 2, RADIUS * 2)
+	sphere.Position = center
+	sphere.Color = Color3.fromRGB(60, 120, 210)
+	sphere.Material = Enum.Material.Neon
+	sphere.Transparency = 0.62
+	sphere.CanQuery = false
+	sphere.Parent = globeModel
+	globeModel.PrimaryPart = sphere
+
+	-- Place each region marker on the globe surface (direction from its world pos).
 	for regionId, def in Regions do
 		local c = regionWorldPos(def)
+		local dir = Vector3.new(c.X, REGION_SPACING * 0.6, c.Z).Unit
 		local marker = makeAnchored("Marker_" .. regionId)
-		marker.Size = Vector3.new(3, 6, 3)
-		marker.Position = origin + Vector3.new(c.X * scale, 9.4, c.Z * scale)
+		marker.Shape = Enum.PartType.Ball
+		marker.Size = Vector3.new(3, 3, 3)
+		marker.Position = center + dir * (RADIUS + 1)
 		marker.Color = Theme.color.stroke
 		marker.Material = Enum.Material.Neon
 		marker.CanQuery = false
-		marker.Parent = folder
+		marker.Parent = globeModel
 		self._holoMarkers[regionId] = marker
 	end
 
-	-- The capital's own marker in the centre.
+	-- The capital marker sits on top of the globe.
 	local capital = makeAnchored("Capital")
-	capital.Shape = Enum.PartType.Cylinder
-	capital.Size = Vector3.new(10, 5, 5)
-	capital.CFrame = CFrame.new(origin + Vector3.new(0, 9, 0)) * CFrame.Angles(0, 0, math.rad(90))
+	capital.Shape = Enum.PartType.Ball
+	capital.Size = Vector3.new(4, 4, 4)
+	capital.Position = center + Vector3.new(0, RADIUS + 1, 0)
 	capital.Color = Theme.color.accent2
 	capital.Material = Enum.Material.Neon
 	capital.CanQuery = false
-	capital.Parent = folder
+	capital.Parent = globeModel
+
+	self._globeModel = globeModel
+end
+
+local MILITARY_BASE = Vector3.new(470, 0, 0) -- east of the city
+
+-- A military base pad east of the city where recruited units physically appear.
+function WorldController:_buildMilitaryBase()
+	local folder = Instance.new("Folder")
+	folder.Name = "NexusMilitary"
+	folder.Parent = Workspace
+	self._militaryFolder = folder
+
+	local pad = makeAnchored("BasePad")
+	pad.Size = Vector3.new(170, 2, 180)
+	pad.Position = MILITARY_BASE + Vector3.new(0, 0, 0)
+	pad.Color = Color3.fromRGB(58, 60, 66)
+	pad.Material = Enum.Material.Concrete
+	pad.CanQuery = false
+	pad.Parent = folder
+
+	local harbor = makeAnchored("Harbor")
+	harbor.Size = Vector3.new(160, 1.2, 46)
+	harbor.Position = MILITARY_BASE + Vector3.new(0, 0.4, 60)
+	harbor.Color = Color3.fromRGB(30, 74, 108)
+	harbor.Material = Enum.Material.Glass
+	harbor.Transparency = 0.2
+	harbor.CanQuery = false
+	harbor.Parent = folder
+
+	local bb = Instance.new("BillboardGui")
+	bb.Size = UDim2.fromOffset(180, 36)
+	bb.StudsOffsetWorldSpace = Vector3.new(0, 24, 0)
+	bb.AlwaysOnTop = true
+	bb.Adornee = pad
+	bb.Parent = pad
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.Font = Theme.font.black
+	label.Text = "⚔ MILITARY BASE"
+	label.TextColor3 = Theme.color.warn
+	label.TextScaled = true
+	label.Parent = bb
+end
+
+-- Show physical units matching the nation's army/navy/air counts (capped).
+function WorldController:_updateMilitary(nation: any)
+	local m = nation.military
+	if not m then
+		return
+	end
+	local sig = ("%d,%d,%d"):format(m.army, m.navy, m.air)
+	if sig == self._unitSig then
+		return
+	end
+	self._unitSig = sig
+	for _, mdl in self._unitModels do
+		mdl:Destroy()
+	end
+	self._unitModels = {}
+	local folder = self._militaryFolder
+	if not folder then
+		return
+	end
+
+	local function grid(count: number, makeFn: () -&gt; Model, corner: Vector3, cols: number, spacing: number)
+		for i = 0, math.min(count, 12) - 1 do
+			local r, c = math.floor(i / cols), i % cols
+			local mdl = makeFn()
+			mdl:PivotTo(CFrame.new(corner + Vector3.new(c * spacing, 0, r * spacing)))
+			mdl.Parent = folder
+			table.insert(self._unitModels, mdl)
+		end
+	end
+
+	grid(m.army, makeTank, MILITARY_BASE + Vector3.new(-62, 2.2, -60), 6, 13)
+	grid(m.air, makePlane, MILITARY_BASE + Vector3.new(-62, 2.2, -6), 6, 13)
+	grid(m.navy, makeShip, MILITARY_BASE + Vector3.new(-56, 2.6, 52), 4, 18)
+end
+
+-- Cars that drive back and forth along the roads to each region.
+function WorldController:_buildTraffic(roads: { any })
+	local folder = Instance.new("Folder")
+	folder.Name = "NexusTraffic"
+	folder.Parent = Workspace
+	for _, seg in roads do
+		for j = 1, 2 do
+			local car = makeCar()
+			car.Parent = folder
+			table.insert(self._cars, {
+				model = car,
+				a = seg.a,
+				b = seg.b,
+				len = math.max((seg.b - seg.a).Magnitude, 1),
+				t = math.random(),
+				speed = 20 + math.random() * 16,
+				dir = j == 1 and 1 or -1,
+				lane = j == 1 and 3.5 or -3.5,
+			})
+		end
+	end
+end
+
+-- Wandering citizens on the city plate.
+function WorldController:_buildCitizens()
+	local folder = Instance.new("Folder")
+	folder.Name = "NexusCitizens"
+	folder.Parent = Workspace
+	for _ = 1, 16 do
+		local ct = makeCitizen()
+		local start = randomPlatePos()
+		ct:PivotTo(CFrame.new(start))
+		ct.Parent = folder
+		table.insert(self._citizens, { model = ct, pos = start, target = randomPlatePos(), speed = 5 + math.random() * 5 })
+	end
+end
+
+-- Volumetric clouds (built-in, no assets).
+function WorldController:_buildClouds()
+	local ok = pcall(function()
+		local clouds = Instance.new("Clouds")
+		clouds.Cover = 0.5
+		clouds.Density = 0.55
+		clouds.Color = Color3.fromRGB(240, 244, 250)
+		clouds.Parent = Workspace.Terrain
+	end)
+	if not ok then
+		-- Older clients without Clouds: ignore.
+	end
+end
+
+-- Per-frame animation for the globe, traffic and citizens.
+function WorldController:_animate(dt: number)
+	if self._globeModel and self._globeModel.PrimaryPart then
+		self._globeAngle += dt * 0.35
+		self._globeModel:PivotTo(CFrame.new(self._globeCenter) * CFrame.Angles(0, self._globeAngle, 0))
+	end
+
+	for _, c in self._cars do
+		c.t += (c.speed * dt / c.len) * c.dir
+		if c.t &gt;= 1 then
+			c.t, c.dir = 1, -1
+		elseif c.t &lt;= 0 then
+			c.t, c.dir = 0, 1
+		end
+		local pos = c.a:Lerp(c.b, c.t)
+		local along = (c.b - c.a)
+		along = along.Magnitude &gt; 0 and along.Unit or Vector3.zAxis
+		local perp = Vector3.new(-along.Z, 0, along.X)
+		local p = pos + perp * c.lane + Vector3.new(0, 1.2, 0)
+		c.model:PivotTo(CFrame.lookAt(p, p + along * c.dir))
+	end
+
+	for _, c in self._citizens do
+		local to = c.target - c.pos
+		if to.Magnitude &lt; 3 then
+			c.target = randomPlatePos()
+			to = c.target - c.pos
+		end
+		if to.Magnitude &gt; 0.1 then
+			local step = math.min(to.Magnitude, c.speed * dt)
+			c.pos += to.Unit * step
+			c.model:PivotTo(CFrame.lookAt(c.pos, c.pos + to.Unit))
+		end
+	end
 end
 
 -- Physical region zones you can travel to, arranged around the capital.
@@ -10683,6 +10947,8 @@ function WorldController:_buildTerrain()
 
 	self:_buildRoads(roads)
 	self:_buildScenery(roadDist, nearCity, nearRegion)
+	self:_buildTraffic(roads)
+	self:_buildClouds()
 end
 
 function WorldController:_buildRoads(roads: { any })
@@ -11072,6 +11338,8 @@ function WorldController:_syncBuildings(nation: any)
 			self._parts[id] = nil
 		end
 	end
+
+	self:_updateMilitary(nation)
 end
 
 -- Recolour region zones to match ownership (you / ally / AI / rival / unclaimed).
@@ -11148,6 +11416,16 @@ function WorldController:Start()
 		self:_syncBuildings(StateController:GetSnapshot().nation)
 	end
 	self:_updateRegionPads(nil)
+
+	-- Drive the living-world animation (globe spin, traffic, citizens).
+	RunService.Heartbeat:Connect(function(dt)
+		local ok, err = pcall(function()
+			self:_animate(dt)
+		end)
+		if not ok then
+			warn("[Nexus] animation error: " .. tostring(err))
+		end
+	end)
 end
 
 return WorldController
