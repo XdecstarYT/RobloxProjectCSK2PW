@@ -53,6 +53,7 @@ WorldController._parts = {} :: { [string]: Model }
 WorldController._cityFolder = nil :: Folder?
 WorldController._baseplate = nil :: BasePart?
 WorldController._regionPads = {} :: { [string]: any }
+WorldController._holoMarkers = {} :: { [string]: any }
 
 -- Camera state.
 WorldController._focus = Vector3.new(0, 0, 0)
@@ -88,6 +89,17 @@ end
 --- The rendered Model for a building id, if it currently exists.
 function WorldController:GetModel(id: string): Model?
 	return self._parts[id]
+end
+
+--- Current camera focus point (used by the minimap).
+function WorldController:GetFocus(): Vector3
+	return self._focus
+end
+
+--- Region world position by id (used by the minimap for click-to-fly).
+function WorldController:RegionWorldPos(regionId: string): Vector3?
+	local def = Regions[regionId]
+	return def and regionWorldPos(def) or nil
 end
 
 -- ---- World construction ---------------------------------------------------
@@ -207,6 +219,101 @@ function WorldController:_buildWorld()
 	self._cityFolder = folder
 
 	self:_buildRegionZones()
+	self:_buildLampPosts()
+	self:_buildHologramMap()
+end
+
+-- Glowing lamp posts around the city edge (they pop at night with bloom).
+function WorldController:_buildLampPosts()
+	local folder = Instance.new("Folder")
+	folder.Name = "NexusLamps"
+	folder.Parent = Workspace
+	local half = WorldGrid.SPAN / 2
+	for i = -half, half, 96 do
+		for _, pos in { Vector3.new(i, 0, -half), Vector3.new(i, 0, half), Vector3.new(-half, 0, i), Vector3.new(half, 0, i) } do
+			local pole = makeAnchored("Pole")
+			pole.Size = Vector3.new(0.8, 12, 0.8)
+			pole.Position = pos + Vector3.new(0, 6, 0)
+			pole.Color = Color3.fromRGB(40, 42, 50)
+			pole.Material = Enum.Material.Metal
+			pole.CanQuery = false
+			pole.Parent = folder
+
+			local bulb = makeAnchored("Bulb")
+			bulb.Shape = Enum.PartType.Ball
+			bulb.Size = Vector3.new(2.4, 2.4, 2.4)
+			bulb.Position = pos + Vector3.new(0, 12, 0)
+			bulb.Color = Color3.fromRGB(255, 226, 150)
+			bulb.Material = Enum.Material.Neon
+			bulb.CanQuery = false
+			bulb.Parent = folder
+		end
+	end
+end
+
+-- A literal, physical strategy map: a war table near the capital with a floating
+-- pillar per region, coloured live by ownership. This is the in-world map.
+function WorldController:_buildHologramMap()
+	local origin = Vector3.new(0, 0, -360) -- just outside the buildable plate
+	local folder = Instance.new("Folder")
+	folder.Name = "NexusWarMap"
+	folder.Parent = Workspace
+
+	local base = makeAnchored("MapTable")
+	base.Size = Vector3.new(64, 6, 46)
+	base.Position = origin + Vector3.new(0, 3, 0)
+	base.Color = Color3.fromRGB(30, 34, 46)
+	base.Material = Enum.Material.Metal
+	base.CanQuery = false
+	base.Parent = folder
+
+	local slab = makeAnchored("HoloSurface")
+	slab.Size = Vector3.new(60, 0.4, 42)
+	slab.Position = origin + Vector3.new(0, 6.4, 0)
+	slab.Color = Color3.fromRGB(70, 130, 220)
+	slab.Material = Enum.Material.Neon
+	slab.Transparency = 0.55
+	slab.CanQuery = false
+	slab.Parent = folder
+
+	local title = Instance.new("BillboardGui")
+	title.Size = UDim2.fromOffset(180, 40)
+	title.StudsOffsetWorldSpace = Vector3.new(0, 12, 0)
+	title.AlwaysOnTop = true
+	title.Adornee = base
+	title.Parent = base
+	local titleLabel = Instance.new("TextLabel")
+	titleLabel.Size = UDim2.fromScale(1, 1)
+	titleLabel.BackgroundTransparency = 1
+	titleLabel.Font = Theme.font.black
+	titleLabel.Text = "🗺 WAR MAP"
+	titleLabel.TextColor3 = Theme.color.accent
+	titleLabel.TextScaled = true
+	titleLabel.Parent = title
+
+	-- Scale region world positions onto the table surface.
+	local scale = 24 / REGION_SPACING
+	for regionId, def in Regions do
+		local c = regionWorldPos(def)
+		local marker = makeAnchored("Marker_" .. regionId)
+		marker.Size = Vector3.new(3, 6, 3)
+		marker.Position = origin + Vector3.new(c.X * scale, 9.4, c.Z * scale)
+		marker.Color = Theme.color.stroke
+		marker.Material = Enum.Material.Neon
+		marker.CanQuery = false
+		marker.Parent = folder
+		self._holoMarkers[regionId] = marker
+	end
+
+	-- The capital's own marker in the centre.
+	local capital = makeAnchored("Capital")
+	capital.Shape = Enum.PartType.Cylinder
+	capital.Size = Vector3.new(10, 5, 5)
+	capital.CFrame = CFrame.new(origin + Vector3.new(0, 9, 0)) * CFrame.Angles(0, 0, math.rad(90))
+	capital.Color = Theme.color.accent2
+	capital.Material = Enum.Material.Neon
+	capital.CanQuery = false
+	capital.Parent = folder
 end
 
 -- Physical region zones you can travel to, arranged around the capital.
@@ -301,6 +408,13 @@ function WorldController:_buildTerrain()
 	pcall(function()
 		Terrain:Clear()
 	end)
+
+	-- Nicer ocean look.
+	Terrain.WaterColor = Color3.fromRGB(26, 84, 128)
+	Terrain.WaterTransparency = 0.55
+	Terrain.WaterWaveSize = 0.18
+	Terrain.WaterWaveSpeed = 12
+	Terrain.WaterReflectance = 0.5
 
 	local LAND_HX, LAND_HZ = 1520, 1160
 
@@ -656,6 +770,40 @@ function WorldController:_buildModel(building: any): Model
 		band.Parent = model
 	end
 
+	-- Warm "lit windows" band — reads as an occupied building, glows at night.
+	local windows = Instance.new("Part")
+	windows.Name = "Windows"
+	windows.Anchored = true
+	windows.CanCollide = false
+	windows.CanQuery = false
+	windows.Material = Enum.Material.Neon
+	windows.Color = Color3.fromRGB(255, 224, 158)
+	windows.Transparency = 0.35
+	windows.Size = Vector3.new(footW * 0.88, bodyHeight * 0.5, footH * 0.88)
+	windows.Position = center + Vector3.new(0, bodyHeight * 0.45, 0)
+	windows.Parent = model
+
+	-- Smoke from power plants and heavy industry.
+	if def.category == "Power" or def.category == "Industry" then
+		local stack = Instance.new("Attachment")
+		stack.Position = Vector3.new(footW * 0.3, bodyHeight + 1, footH * 0.3)
+		stack.Parent = body
+		local smoke = Instance.new("ParticleEmitter")
+		smoke.Texture = "rbxasset://textures/particles/smoke_main.dds"
+		smoke.Color = ColorSequence.new(Color3.fromRGB(120, 120, 125))
+		smoke.Size = NumberSequence.new(3, 9)
+		smoke.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0.4),
+			NumberSequenceKeypoint.new(1, 1),
+		})
+		smoke.Rate = 6
+		smoke.Lifetime = NumberRange.new(2, 3.5)
+		smoke.Speed = NumberRange.new(6, 10)
+		smoke.VelocityInheritance = 0
+		smoke.Acceleration = Vector3.new(0, 4, 0)
+		smoke.Parent = stack
+	end
+
 	model.PrimaryPart = body
 	model.Parent = self:GetCityFolder()
 
@@ -681,6 +829,8 @@ local function setActive(model: Model, active: boolean)
 		end
 		if part.Name == "Accent" or part.Name == "Accent2" then
 			part.Transparency = active and 0 or 0.8
+		elseif part.Name == "Windows" then
+			part.Transparency = active and 0.35 or 0.85
 		else
 			part.Transparency = active and 0 or 0.55
 		end
@@ -733,27 +883,34 @@ function WorldController:_updateRegionPads(map: { any }?)
 		byId[entry.id] = entry
 	end
 
-	for regionId, refs in self._regionPads do
+	local function colorFor(regionId: string): (Color3, string)
 		local entry = byId[regionId]
-		local color, tag
 		if entry and entry.ownerId then
 			local ownerId = entry.ownerId
 			if ownerId == myId then
-				color, tag = Theme.color.accent, "Your territory"
+				return Theme.color.accent, "Your territory"
 			elseif allies[tostring(ownerId)] then
-				color, tag = Theme.color.good, "Ally: " .. (entry.ownerName or "?")
+				return Theme.color.good, "Ally: " .. (entry.ownerName or "?")
 			elseif ownerId < 0 then
-				color, tag = Theme.color.warn, entry.ownerName or "AI"
-			else
-				color, tag = Color3.fromRGB(170, 130, 230), entry.ownerName or "Rival"
+				return Theme.color.warn, entry.ownerName or "AI"
 			end
-		else
-			color, tag = Theme.color.stroke, "Unclaimed"
+			return Color3.fromRGB(170, 130, 230), entry.ownerName or "Rival"
 		end
+		return Theme.color.stroke, "Unclaimed"
+	end
+
+	for regionId, refs in self._regionPads do
+		local color, tag = colorFor(regionId)
 		refs.pad.Color = color:Lerp(Theme.color.bg, 0.6)
 		refs.box.Color3 = color
 		refs.owner.Text = tag
 		refs.owner.TextColor3 = color
+	end
+
+	-- The physical war-map markers track the same ownership.
+	for regionId, marker in self._holoMarkers do
+		local color = colorFor(regionId)
+		marker.Color = color
 	end
 end
 

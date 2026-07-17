@@ -662,10 +662,12 @@ function BuildController:_bindInput()
 			return
 		end
 
-		-- Remember a touch start so InputEnded can tell a tap from a drag.
+		-- Remember a touch start so InputEnded can tell a tap from a drag. A touch
+		-- that began on UI (gameProcessed) is ignored so tapping panels/minimap
+		-- never selects or builds in the world.
 		if input.UserInputType == Enum.UserInputType.Touch then
-			touchStart = Vector2.new(input.Position.X, input.Position.Y)
-			return -- never place/select on touch-begin; that's for tap/buttons
+			touchStart = if gameProcessed then nil else Vector2.new(input.Position.X, input.Position.Y)
+			return
 		end
 
 		if gameProcessed then

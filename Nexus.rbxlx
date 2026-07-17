@@ -3,7 +3,7 @@
 <Meta name="ExplicitAutoJoints">true</Meta>
 <External>null</External>
 <External>nil</External>
-<Item class="ReplicatedStorage" referent="RBX00000078"><Properties></Properties><Item class="Folder" referent="RBX00000023"><Properties><string name="Name">Nexus</string></Properties><Item class="ModuleScript" referent="RBX00000013"><Properties><string name="Name">Config</string><ProtectedString name="Source">--!strict
+<Item class="ReplicatedStorage" referent="RBX00000079"><Properties></Properties><Item class="Folder" referent="RBX00000023"><Properties><string name="Name">Nexus</string></Properties><Item class="ModuleScript" referent="RBX00000013"><Properties><string name="Name">Config</string><ProtectedString name="Source">--!strict
 --[[
 	Config/init.luau
 	Aggregates every configuration table behind one require. Because this folder
@@ -2019,7 +2019,7 @@ function WorldGrid.worldToTile(position: Vector3): (number, number)
 end
 
 return WorldGrid
-</ProtectedString></Properties></Item></Item></Item><Item class="ServerScriptService" referent="RBX00000079"><Properties></Properties><Item class="Script" referent="RBX00000046"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item></Item><Item class="ServerScriptService" referent="RBX00000080"><Properties></Properties><Item class="Script" referent="RBX00000046"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
 --[[
 	init.server.luau
 	Server bootstrap. Requires every service, registers it with the Framework,
@@ -5662,7 +5662,7 @@ function Validation.readPosition(payload: any): ({ x: number, z: number })?
 end
 
 return Validation
-</ProtectedString></Properties></Item></Item></Item></Item><Item class="StarterPlayer" referent="RBX00000081"><Properties></Properties><Item class="StarterPlayerScripts" referent="RBX00000080"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX00000077"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item></Item></Item><Item class="StarterPlayer" referent="RBX00000082"><Properties></Properties><Item class="StarterPlayerScripts" referent="RBX00000081"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX00000078"><Properties><string name="Name">Nexus</string><ProtectedString name="Source">--!strict
 --[[
 	init.client.luau
 	Client bootstrap. Registers every controller with the ClientFramework, then
@@ -5698,6 +5698,7 @@ local ORDER = {
 	"MarketController",
 	"ObjectivesController",
 	"LeaderboardController",
+	"MinimapController",
 	"SettingsController",
 	"TutorialController",
 }
@@ -5815,7 +5816,7 @@ function ClientPrefs.set(key: string, value: any)
 end
 
 return ClientPrefs
-</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000068"><Properties><string name="Name">Controllers</string></Properties><Item class="ModuleScript" referent="RBX00000049"><Properties><string name="Name">AmbianceController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="Folder" referent="RBX00000069"><Properties><string name="Name">Controllers</string></Properties><Item class="ModuleScript" referent="RBX00000049"><Properties><string name="Name">AmbianceController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/AmbianceController.luau
 	Sets the mood: cinematic lighting, atmospheric depth and post-processing.
@@ -6590,10 +6591,12 @@ function BuildController:_bindInput()
 			return
 		end
 
-		-- Remember a touch start so InputEnded can tell a tap from a drag.
+		-- Remember a touch start so InputEnded can tell a tap from a drag. A touch
+		-- that began on UI (gameProcessed) is ignored so tapping panels/minimap
+		-- never selects or builds in the world.
 		if input.UserInputType == Enum.UserInputType.Touch then
-			touchStart = Vector2.new(input.Position.X, input.Position.Y)
-			return -- never place/select on touch-begin; that's for tap/buttons
+			touchStart = if gameProcessed then nil else Vector2.new(input.Position.X, input.Position.Y)
+			return
 		end
 
 		if gameProcessed then
@@ -8381,7 +8384,181 @@ function MilitaryController:Start()
 end
 
 return MilitaryController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000057"><Properties><string name="Name">NotificationController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000057"><Properties><string name="Name">MinimapController</string><ProtectedString name="Source">--!strict
+--[[
+	Controllers/MinimapController.luau
+	A corner minimap: a top-down schematic of the world with the capital at
+	centre, a coloured dot per region (by ownership), and a live marker for where
+	the camera is looking. Click anywhere on it to cinematically fly there.
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local Regions = require(ReplicatedStorage.Nexus.Config.Regions)
+
+local Create = require(script.Parent.Parent.UI.Create)
+local Theme = require(script.Parent.Parent.UI.Theme)
+
+local SIZE = 172
+local WORLD = 1500 -- half-extent mapped to the minimap edges
+
+local MinimapController = {
+	Name = "MinimapController",
+}
+
+MinimapController._dots = {} :: { [string]: Frame }
+MinimapController._camMarker = nil :: Frame?
+MinimapController._map = nil :: TextButton?
+
+local function worldToUV(x: number, z: number): (number, number)
+	return math.clamp(x / (2 * WORLD) + 0.5, 0, 1), math.clamp(z / (2 * WORLD) + 0.5, 0, 1)
+end
+
+local function dot(color: Color3, sizePx: number): Frame
+	return Create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Size = UDim2.fromOffset(sizePx, sizePx),
+		BackgroundColor3 = color,
+		BorderSizePixel = 0,
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = UDim.new(1, 0) }),
+			Create("UIStroke", { Color = Theme.color.bg, Thickness = 1 }),
+		},
+	}) :: Frame
+end
+
+function MinimapController:_build()
+	local HudController = require(script.Parent.HudController)
+	local gui = HudController:GetGui()
+
+	local map = Create("TextButton", {
+		Name = "Minimap",
+		Text = "",
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 16, 1, -70),
+		Size = UDim2.fromOffset(SIZE, SIZE),
+		BackgroundColor3 = Color3.fromRGB(22, 40, 34),
+		AutoButtonColor = false,
+		ClipsDescendants = true,
+		[Create.Children] = {
+			Create("UICorner", { CornerRadius = UDim.new(0, 10) }),
+			Create("UIStroke", { Color = Theme.color.accent, Thickness = 1.5, Transparency = 0.2 }),
+			-- Faint water border ring implied by a darker inset.
+			Create("Frame", {
+				Name = "Land",
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromScale(0.86, 0.86),
+				BackgroundColor3 = Color3.fromRGB(46, 74, 52),
+				[Create.Children] = { Create("UICorner", { CornerRadius = UDim.new(0, 6) }) },
+			}),
+		},
+	}) :: TextButton
+	self._map = map
+
+	-- Capital marker at centre.
+	local capital = dot(Theme.color.accent2, 10)
+	capital.Position = UDim2.fromScale(0.5, 0.5)
+	capital.Parent = map
+
+	-- Region dots (positions fixed; colours update with ownership).
+	for regionId in Regions do
+		local WorldController = require(script.Parent.WorldController)
+		local pos = WorldController:RegionWorldPos(regionId)
+		if pos then
+			local u, v = worldToUV(pos.X, pos.Z)
+			local d = dot(Theme.color.stroke, 8)
+			d.Position = UDim2.fromScale(u, v)
+			d.Parent = map
+			self._dots[regionId] = d
+		end
+	end
+
+	-- Camera focus marker.
+	self._camMarker = dot(Color3.fromRGB(255, 255, 255), 7)
+	local marker = self._camMarker :: Frame
+	marker.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	marker.Parent = map
+
+	map.Parent = gui
+
+	-- Click / tap to fly there.
+	map.InputBegan:Connect(function(input)
+		if input.UserInputType ~= Enum.UserInputType.MouseButton1
+			and input.UserInputType ~= Enum.UserInputType.Touch
+		then
+			return
+		end
+		local rel = Vector2.new(input.Position.X, input.Position.Y) - map.AbsolutePosition
+		local u = math.clamp(rel.X / map.AbsoluteSize.X, 0, 1)
+		local v = math.clamp(rel.Y / map.AbsoluteSize.Y, 0, 1)
+		local worldX = (u - 0.5) * 2 * WORLD
+		local worldZ = (v - 0.5) * 2 * WORLD
+		local WorldController = require(script.Parent.WorldController)
+		WorldController:FlyTo(Vector3.new(worldX, 0, worldZ), 150)
+	end)
+end
+
+function MinimapController:_refreshColors()
+	local StateController = require(script.Parent.StateController)
+	local WorldStateController = require(script.Parent.WorldStateController)
+	local myId = Players.LocalPlayer.UserId
+	local nation = StateController:GetNation()
+	local allies = nation and nation.diplomacy and nation.diplomacy.allies or {}
+	local byId: { [string]: any } = {}
+	for _, entry in WorldStateController:GetTerritory() do
+		byId[entry.id] = entry
+	end
+	for regionId, d in self._dots do
+		local entry = byId[regionId]
+		local color = Theme.color.stroke
+		if entry and entry.ownerId then
+			local o = entry.ownerId
+			if o == myId then
+				color = Theme.color.accent
+			elseif allies[tostring(o)] then
+				color = Theme.color.good
+			elseif o &lt; 0 then
+				color = Theme.color.warn
+			else
+				color = Color3.fromRGB(170, 130, 230)
+			end
+		end
+		d.BackgroundColor3 = color
+	end
+end
+
+function MinimapController:Start()
+	local WorldStateController = require(script.Parent.WorldStateController)
+	local StateController = require(script.Parent.StateController)
+	local WorldController = require(script.Parent.WorldController)
+
+	self:_build()
+	WorldStateController.TerritoryChanged:Connect(function()
+		self:_refreshColors()
+	end)
+	StateController.Changed:Connect(function()
+		self:_refreshColors()
+	end)
+	self:_refreshColors()
+
+	-- Track the camera focus on the map.
+	RunService.RenderStepped:Connect(function()
+		local marker = self._camMarker
+		if not marker then
+			return
+		end
+		local focus = WorldController:GetFocus()
+		local u, v = worldToUV(focus.X, focus.Z)
+		marker.Position = UDim2.fromScale(u, v)
+	end)
+end
+
+return MinimapController
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000058"><Properties><string name="Name">NotificationController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/NotificationController.luau
 	Renders transient server notifications as stacked toasts in the top-right.
@@ -8525,7 +8702,7 @@ function NotificationController:Start()
 end
 
 return NotificationController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000058"><Properties><string name="Name">ObjectivesController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000059"><Properties><string name="Name">ObjectivesController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/ObjectivesController.luau
 	The goals screen: every milestone with its reward and a done/to-do state,
@@ -8717,7 +8894,7 @@ function ObjectivesController:Start()
 end
 
 return ObjectivesController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000059"><Properties><string name="Name">PoliticsController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000060"><Properties><string name="Name">PoliticsController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/PoliticsController.luau
 	The governance panel: adjust the tax rate, switch government type, and
@@ -8998,7 +9175,7 @@ function PoliticsController:Start()
 end
 
 return PoliticsController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000060"><Properties><string name="Name">ResearchController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000061"><Properties><string name="Name">ResearchController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/ResearchController.luau
 	The technology panel. Lists every tech grouped by branch with a live status —
@@ -9243,7 +9420,7 @@ function ResearchController:Start()
 end
 
 return ResearchController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000061"><Properties><string name="Name">SettingsController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000062"><Properties><string name="Name">SettingsController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/SettingsController.luau
 	The options menu. Drives ClientPrefs, which SoundController, AmbianceController
@@ -9447,7 +9624,7 @@ function SettingsController:Start()
 end
 
 return SettingsController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000062"><Properties><string name="Name">SoundController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000063"><Properties><string name="Name">SoundController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/SoundController.luau
 	Audio plumbing with music/SFX volume buses. Reads sound ids from Config/Audio
@@ -9530,7 +9707,7 @@ function SoundController:Start()
 end
 
 return SoundController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000063"><Properties><string name="Name">StateController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000064"><Properties><string name="Name">StateController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/StateController.luau
 	The client's single source of truth for replicated nation state. It listens
@@ -9590,7 +9767,7 @@ function StateController:Init()
 end
 
 return StateController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000064"><Properties><string name="Name">TerritoryController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000065"><Properties><string name="Name">TerritoryController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/TerritoryController.luau
 	The world map: a grid of claimable regions laid out from the Regions config
@@ -9821,7 +9998,7 @@ function TerritoryController:Start()
 end
 
 return TerritoryController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000065"><Properties><string name="Name">TutorialController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000066"><Properties><string name="Name">TutorialController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/TutorialController.luau
 	A guided first-session card. It shows one step at a time and auto-advances
@@ -10026,7 +10203,7 @@ function TutorialController:Start()
 end
 
 return TutorialController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000066"><Properties><string name="Name">WorldController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000067"><Properties><string name="Name">WorldController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/WorldController.luau
 	Builds the 3D city view: a stylized ground with a glowing district grid,
@@ -10081,6 +10258,7 @@ WorldController._parts = {} :: { [string]: Model }
 WorldController._cityFolder = nil :: Folder?
 WorldController._baseplate = nil :: BasePart?
 WorldController._regionPads = {} :: { [string]: any }
+WorldController._holoMarkers = {} :: { [string]: any }
 
 -- Camera state.
 WorldController._focus = Vector3.new(0, 0, 0)
@@ -10116,6 +10294,17 @@ end
 --- The rendered Model for a building id, if it currently exists.
 function WorldController:GetModel(id: string): Model?
 	return self._parts[id]
+end
+
+--- Current camera focus point (used by the minimap).
+function WorldController:GetFocus(): Vector3
+	return self._focus
+end
+
+--- Region world position by id (used by the minimap for click-to-fly).
+function WorldController:RegionWorldPos(regionId: string): Vector3?
+	local def = Regions[regionId]
+	return def and regionWorldPos(def) or nil
 end
 
 -- ---- World construction ---------------------------------------------------
@@ -10235,6 +10424,101 @@ function WorldController:_buildWorld()
 	self._cityFolder = folder
 
 	self:_buildRegionZones()
+	self:_buildLampPosts()
+	self:_buildHologramMap()
+end
+
+-- Glowing lamp posts around the city edge (they pop at night with bloom).
+function WorldController:_buildLampPosts()
+	local folder = Instance.new("Folder")
+	folder.Name = "NexusLamps"
+	folder.Parent = Workspace
+	local half = WorldGrid.SPAN / 2
+	for i = -half, half, 96 do
+		for _, pos in { Vector3.new(i, 0, -half), Vector3.new(i, 0, half), Vector3.new(-half, 0, i), Vector3.new(half, 0, i) } do
+			local pole = makeAnchored("Pole")
+			pole.Size = Vector3.new(0.8, 12, 0.8)
+			pole.Position = pos + Vector3.new(0, 6, 0)
+			pole.Color = Color3.fromRGB(40, 42, 50)
+			pole.Material = Enum.Material.Metal
+			pole.CanQuery = false
+			pole.Parent = folder
+
+			local bulb = makeAnchored("Bulb")
+			bulb.Shape = Enum.PartType.Ball
+			bulb.Size = Vector3.new(2.4, 2.4, 2.4)
+			bulb.Position = pos + Vector3.new(0, 12, 0)
+			bulb.Color = Color3.fromRGB(255, 226, 150)
+			bulb.Material = Enum.Material.Neon
+			bulb.CanQuery = false
+			bulb.Parent = folder
+		end
+	end
+end
+
+-- A literal, physical strategy map: a war table near the capital with a floating
+-- pillar per region, coloured live by ownership. This is the in-world map.
+function WorldController:_buildHologramMap()
+	local origin = Vector3.new(0, 0, -360) -- just outside the buildable plate
+	local folder = Instance.new("Folder")
+	folder.Name = "NexusWarMap"
+	folder.Parent = Workspace
+
+	local base = makeAnchored("MapTable")
+	base.Size = Vector3.new(64, 6, 46)
+	base.Position = origin + Vector3.new(0, 3, 0)
+	base.Color = Color3.fromRGB(30, 34, 46)
+	base.Material = Enum.Material.Metal
+	base.CanQuery = false
+	base.Parent = folder
+
+	local slab = makeAnchored("HoloSurface")
+	slab.Size = Vector3.new(60, 0.4, 42)
+	slab.Position = origin + Vector3.new(0, 6.4, 0)
+	slab.Color = Color3.fromRGB(70, 130, 220)
+	slab.Material = Enum.Material.Neon
+	slab.Transparency = 0.55
+	slab.CanQuery = false
+	slab.Parent = folder
+
+	local title = Instance.new("BillboardGui")
+	title.Size = UDim2.fromOffset(180, 40)
+	title.StudsOffsetWorldSpace = Vector3.new(0, 12, 0)
+	title.AlwaysOnTop = true
+	title.Adornee = base
+	title.Parent = base
+	local titleLabel = Instance.new("TextLabel")
+	titleLabel.Size = UDim2.fromScale(1, 1)
+	titleLabel.BackgroundTransparency = 1
+	titleLabel.Font = Theme.font.black
+	titleLabel.Text = "🗺 WAR MAP"
+	titleLabel.TextColor3 = Theme.color.accent
+	titleLabel.TextScaled = true
+	titleLabel.Parent = title
+
+	-- Scale region world positions onto the table surface.
+	local scale = 24 / REGION_SPACING
+	for regionId, def in Regions do
+		local c = regionWorldPos(def)
+		local marker = makeAnchored("Marker_" .. regionId)
+		marker.Size = Vector3.new(3, 6, 3)
+		marker.Position = origin + Vector3.new(c.X * scale, 9.4, c.Z * scale)
+		marker.Color = Theme.color.stroke
+		marker.Material = Enum.Material.Neon
+		marker.CanQuery = false
+		marker.Parent = folder
+		self._holoMarkers[regionId] = marker
+	end
+
+	-- The capital's own marker in the centre.
+	local capital = makeAnchored("Capital")
+	capital.Shape = Enum.PartType.Cylinder
+	capital.Size = Vector3.new(10, 5, 5)
+	capital.CFrame = CFrame.new(origin + Vector3.new(0, 9, 0)) * CFrame.Angles(0, 0, math.rad(90))
+	capital.Color = Theme.color.accent2
+	capital.Material = Enum.Material.Neon
+	capital.CanQuery = false
+	capital.Parent = folder
 end
 
 -- Physical region zones you can travel to, arranged around the capital.
@@ -10329,6 +10613,13 @@ function WorldController:_buildTerrain()
 	pcall(function()
 		Terrain:Clear()
 	end)
+
+	-- Nicer ocean look.
+	Terrain.WaterColor = Color3.fromRGB(26, 84, 128)
+	Terrain.WaterTransparency = 0.55
+	Terrain.WaterWaveSize = 0.18
+	Terrain.WaterWaveSpeed = 12
+	Terrain.WaterReflectance = 0.5
 
 	local LAND_HX, LAND_HZ = 1520, 1160
 
@@ -10684,6 +10975,40 @@ function WorldController:_buildModel(building: any): Model
 		band.Parent = model
 	end
 
+	-- Warm "lit windows" band — reads as an occupied building, glows at night.
+	local windows = Instance.new("Part")
+	windows.Name = "Windows"
+	windows.Anchored = true
+	windows.CanCollide = false
+	windows.CanQuery = false
+	windows.Material = Enum.Material.Neon
+	windows.Color = Color3.fromRGB(255, 224, 158)
+	windows.Transparency = 0.35
+	windows.Size = Vector3.new(footW * 0.88, bodyHeight * 0.5, footH * 0.88)
+	windows.Position = center + Vector3.new(0, bodyHeight * 0.45, 0)
+	windows.Parent = model
+
+	-- Smoke from power plants and heavy industry.
+	if def.category == "Power" or def.category == "Industry" then
+		local stack = Instance.new("Attachment")
+		stack.Position = Vector3.new(footW * 0.3, bodyHeight + 1, footH * 0.3)
+		stack.Parent = body
+		local smoke = Instance.new("ParticleEmitter")
+		smoke.Texture = "rbxasset://textures/particles/smoke_main.dds"
+		smoke.Color = ColorSequence.new(Color3.fromRGB(120, 120, 125))
+		smoke.Size = NumberSequence.new(3, 9)
+		smoke.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0.4),
+			NumberSequenceKeypoint.new(1, 1),
+		})
+		smoke.Rate = 6
+		smoke.Lifetime = NumberRange.new(2, 3.5)
+		smoke.Speed = NumberRange.new(6, 10)
+		smoke.VelocityInheritance = 0
+		smoke.Acceleration = Vector3.new(0, 4, 0)
+		smoke.Parent = stack
+	end
+
 	model.PrimaryPart = body
 	model.Parent = self:GetCityFolder()
 
@@ -10709,6 +11034,8 @@ local function setActive(model: Model, active: boolean)
 		end
 		if part.Name == "Accent" or part.Name == "Accent2" then
 			part.Transparency = active and 0 or 0.8
+		elseif part.Name == "Windows" then
+			part.Transparency = active and 0.35 or 0.85
 		else
 			part.Transparency = active and 0 or 0.55
 		end
@@ -10761,27 +11088,34 @@ function WorldController:_updateRegionPads(map: { any }?)
 		byId[entry.id] = entry
 	end
 
-	for regionId, refs in self._regionPads do
+	local function colorFor(regionId: string): (Color3, string)
 		local entry = byId[regionId]
-		local color, tag
 		if entry and entry.ownerId then
 			local ownerId = entry.ownerId
 			if ownerId == myId then
-				color, tag = Theme.color.accent, "Your territory"
+				return Theme.color.accent, "Your territory"
 			elseif allies[tostring(ownerId)] then
-				color, tag = Theme.color.good, "Ally: " .. (entry.ownerName or "?")
+				return Theme.color.good, "Ally: " .. (entry.ownerName or "?")
 			elseif ownerId &lt; 0 then
-				color, tag = Theme.color.warn, entry.ownerName or "AI"
-			else
-				color, tag = Color3.fromRGB(170, 130, 230), entry.ownerName or "Rival"
+				return Theme.color.warn, entry.ownerName or "AI"
 			end
-		else
-			color, tag = Theme.color.stroke, "Unclaimed"
+			return Color3.fromRGB(170, 130, 230), entry.ownerName or "Rival"
 		end
+		return Theme.color.stroke, "Unclaimed"
+	end
+
+	for regionId, refs in self._regionPads do
+		local color, tag = colorFor(regionId)
 		refs.pad.Color = color:Lerp(Theme.color.bg, 0.6)
 		refs.box.Color3 = color
 		refs.owner.Text = tag
 		refs.owner.TextColor3 = color
+	end
+
+	-- The physical war-map markers track the same ownership.
+	for regionId, marker in self._holoMarkers do
+		local color = colorFor(regionId)
+		marker.Color = color
 	end
 end
 
@@ -10817,7 +11151,7 @@ function WorldController:Start()
 end
 
 return WorldController
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000067"><Properties><string name="Name">WorldStateController</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000068"><Properties><string name="Name">WorldStateController</string><ProtectedString name="Source">--!strict
 --[[
 	Controllers/WorldStateController.luau
 	Client store for world-scope data that isn't part of the player's own nation:
@@ -10879,7 +11213,7 @@ function WorldStateController:Init()
 end
 
 return WorldStateController
-</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000076"><Properties><string name="Name">UI</string></Properties><Item class="Folder" referent="RBX00000069"><Properties><string name="Name">Components</string></Properties></Item><Item class="ModuleScript" referent="RBX00000070"><Properties><string name="Name">Create</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item></Item><Item class="Folder" referent="RBX00000077"><Properties><string name="Name">UI</string></Properties><Item class="Folder" referent="RBX00000070"><Properties><string name="Name">Components</string></Properties></Item><Item class="ModuleScript" referent="RBX00000071"><Properties><string name="Name">Create</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Create.luau
 	A tiny declarative helper for building Instance trees without the noise of
@@ -10939,7 +11273,7 @@ local callable = setmetatable(Create, {
 
 -- The `any` cast lets callers use both `Create("Frame")` and `Create.Children`.
 return (callable :: any) :: (((className: string, props: { [any]: any }?) -&gt; Instance) &amp; typeof(Create))
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000071"><Properties><string name="Name">Decor</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000072"><Properties><string name="Name">Decor</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Decor.luau
 	Small cosmetic helpers so every panel, chip and button gets the same finish
@@ -11007,7 +11341,7 @@ function Decor.shadow(frame: GuiObject): Frame
 end
 
 return Decor
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000072"><Properties><string name="Name">Format</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000073"><Properties><string name="Name">Format</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Format.luau
 	Number/text formatting shared by every panel, so "12.3k" and "+4.5%" look the
@@ -11045,7 +11379,7 @@ function Format.round(n: number): string
 end
 
 return Format
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000073"><Properties><string name="Name">Graph</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000074"><Properties><string name="Name">Graph</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Graph.luau
 	A tiny, asset-free bar graph. Given a container size it returns the frame plus
@@ -11126,7 +11460,7 @@ function Graph.new(size: UDim2): (Frame, (values: { number }, color: Color3?) -&
 end
 
 return Graph
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000074"><Properties><string name="Name">Motion</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000075"><Properties><string name="Name">Motion</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Motion.luau
 	Tiny animation helpers so panels don't just snap on/off. Uses a UIScale child
@@ -11174,7 +11508,7 @@ function Motion.toggle(frame: GuiObject)
 end
 
 return Motion
-</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000075"><Properties><string name="Name">Theme</string><ProtectedString name="Source">--!strict
+</ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX00000076"><Properties><string name="Name">Theme</string><ProtectedString name="Source">--!strict
 --[[
 	UI/Theme.luau
 	Design tokens for the whole interface. One place to restyle the game. Tuned
@@ -11226,5 +11560,5 @@ Theme.corner = UDim.new(0, 12)
 Theme.pad = 10
 
 return Theme
-</ProtectedString></Properties></Item></Item></Item></Item></Item><Item class="Workspace" referent="RBX00000082"><Properties><bool name="StreamingEnabled">false</bool></Properties></Item><Item class="Players" referent="RBX00000083"><Properties><bool name="CharacterAutoLoads">false</bool></Properties></Item>
+</ProtectedString></Properties></Item></Item></Item></Item></Item><Item class="Workspace" referent="RBX00000083"><Properties><bool name="StreamingEnabled">false</bool></Properties></Item><Item class="Players" referent="RBX00000084"><Properties><bool name="CharacterAutoLoads">false</bool></Properties></Item>
 </roblox>

@@ -34,6 +34,7 @@ local ORDER = {
 	"MarketController",
 	"ObjectivesController",
 	"LeaderboardController",
+	"MinimapController",
 	"SettingsController",
 	"TutorialController",
 }
